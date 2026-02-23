@@ -1,12 +1,18 @@
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template_string, request, jsonify
 import yfinance as yf
 import ta
 import pandas as pd
 from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import anthropic
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
+client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 TICKERS = {
     "OMX30":   "^OMX",
@@ -83,7 +89,23 @@ def sammanfatta(namn, df):
         "trend": trend, "trend_farg": trend_farg, "macd_signal": macd_signal,
         "sma50": round(sma50, 2) if sma50 else "N/A",
         "sma200": round(sma200, 2) if sma200 else "N/A",
+        "macd_hist": round(macd_hist, 2),
     }
+
+def hamta_marknadsdata():
+    sammanfattningar = []
+    for namn, ticker in TICKERS.items():
+        try:
+            df = hamta_data(ticker, yf_period="3mo", yf_interval="1d")
+            s = sammanfatta(namn, df)
+            sammanfattningar.append(
+                f"{namn}: Kurs {s['kurs']:.2f}, RSI {s['rsi']} ({s['rsi_text']}), "
+                f"Trend: {s['trend']}, MACD: {s['macd_signal']}, "
+                f"SMA50: {s['sma50']}, SMA200: {s['sma200']}"
+            )
+        except:
+            pass
+    return "\n".join(sammanfattningar)
 
 def skapa_diagram(namn, df, interval_label="Daily"):
     if interval_label == "Daily":
@@ -104,11 +126,9 @@ def skapa_diagram(namn, df, interval_label="Daily"):
     )
 
     fig.add_trace(go.Candlestick(
-        x=x_labels,
-        open=open_, high=df["High"].squeeze(),
-        low=df["Low"].squeeze(), close=close,
-        name="Pris",
-        increasing=dict(line=dict(color="#111111", width=1.5), fillcolor="#ffffff"),
+        x=x_labels, open=open_, high=df["High"].squeeze(),
+        low=df["Low"].squeeze(), close=close, name="Pris",
+        increasing=dict(line=dict(color="#007700", width=1.5), fillcolor="#00aa00"),
         decreasing=dict(line=dict(color="#cc0000", width=1.5), fillcolor="#cc0000"),
     ), row=1, col=1)
 
@@ -150,6 +170,7 @@ def skapa_diagram(namn, df, interval_label="Daily"):
 NAV_HTML = """
 <nav style="margin-bottom:25px; display:flex; gap:12px;">
     <a href="/" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Dashboard</a>
+    <a href="/analytiker" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">AI-Analytiker</a>
     <a href="/riskmotor" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Riskmotor</a>
 </nav>
 """
@@ -165,7 +186,6 @@ BASE_STYLE = """
     .filter-bar label { color: #666; font-size: 0.82em; font-weight: bold; display: block; margin-bottom: 3px; }
     .filter-bar select { padding: 6px 10px; border: 1px solid #ccc; border-radius: 5px; background: #fff; font-size: 0.9em; color: #222; cursor: pointer; }
     .filter-bar button { padding: 7px 18px; background: #0044cc; color: #fff; border: none; border-radius: 5px; font-size: 0.9em; cursor: pointer; }
-    .filter-bar button:hover { background: #0033aa; }
 </style>
 """
 
@@ -188,7 +208,6 @@ def dashboard():
         .rad:last-child { border-bottom: none; }
         .etikett { color: #999; }
         .detalj-btn { display: block; margin-top: 14px; text-align: center; padding: 7px; background: #0044cc11; color: #0044cc; border-radius: 6px; text-decoration: none; font-size: 0.88em; }
-        .detalj-btn:hover { background: #0044cc22; }
     </style></head>
     <body>""" + NAV_HTML + """
         <h1>Trading Dashboard</h1>
@@ -202,11 +221,11 @@ def dashboard():
                     {{ "%+.2f"|format(k.forandring) }}% senaste månaden
                 </div>
                 <div class="rad"><span class="etikett">Trend</span><span style="color:{{ k.trend_farg }}">{{ k.trend }}</span></div>
-                <div class="rad"><span class="etikett">RSI (14)</span><span style="color:{{ k.rsi_farg }}">{{ k.rsi }} – {{ k.rsi_text }}</span></div>
+                <div class="rad"><span class="etikett">RSI (14)</span><span style="color:{{ k.rsi_farg }}">{{ k.rsi }} - {{ k.rsi_text }}</span></div>
                 <div class="rad"><span class="etikett">MACD</span><span>{{ k.macd_signal }}</span></div>
                 <div class="rad"><span class="etikett">SMA50</span><span>{{ k.sma50 }}</span></div>
                 <div class="rad"><span class="etikett">SMA200</span><span>{{ k.sma200 }}</span></div>
-                <a class="detalj-btn" href="/detalj/{{ k.namn }}" target="_blank">Öppna diagram ↗</a>
+                <a class="detalj-btn" href="/detalj/{{ k.namn }}" target="_blank">Oppna diagram</a>
             </div>
         {% endfor %}
         </div>
@@ -221,19 +240,15 @@ def detalj(namn):
         return "Index hittades inte", 404
     aktiv_period = request.args.get("period", "Daily")
     aktiv_range  = request.args.get("range", "6 Months")
-    if aktiv_period not in PERIOD_MAP:
-        aktiv_period = "Daily"
-    if aktiv_range not in RANGE_MAP:
-        aktiv_range = "6 Months"
+    if aktiv_period not in PERIOD_MAP: aktiv_period = "Daily"
+    if aktiv_range not in RANGE_MAP: aktiv_range = "6 Months"
     yf_interval = PERIOD_MAP[aktiv_period]
     yf_period   = RANGE_MAP[aktiv_range]
     df = hamta_data(ticker, yf_period=yf_period, yf_interval=yf_interval)
     s  = sammanfatta(namn, df)
     diagram_html = skapa_diagram(namn, df, interval_label=aktiv_period)
-
     period_opts = "".join(f'<option value="{p}" {"selected" if p == aktiv_period else ""}>{p}</option>' for p in PERIOD_MAP)
     range_opts  = "".join(f'<option value="{r}" {"selected" if r == aktiv_range else ""}>{r}</option>' for r in RANGE_MAP)
-
     html = """<!DOCTYPE html><html>
     <head><title>{{ namn }}</title><meta charset="utf-8">""" + BASE_STYLE + """
     <style>
@@ -252,7 +267,7 @@ def detalj(namn):
         </div>
         <div class="info-rad">
             <div class="info-box"><div class="etikett">Trend</div><div class="varde" style="color:{{ s.trend_farg }}">{{ s.trend }}</div></div>
-            <div class="info-box"><div class="etikett">RSI (14)</div><div class="varde" style="color:{{ s.rsi_farg }}">{{ s.rsi }} – {{ s.rsi_text }}</div></div>
+            <div class="info-box"><div class="etikett">RSI (14)</div><div class="varde" style="color:{{ s.rsi_farg }}">{{ s.rsi }} - {{ s.rsi_text }}</div></div>
             <div class="info-box"><div class="etikett">MACD</div><div class="varde">{{ s.macd_signal }}</div></div>
             <div class="info-box"><div class="etikett">SMA50</div><div class="varde">{{ s.sma50 }}</div></div>
             <div class="info-box"><div class="etikett">SMA200</div><div class="varde">{{ s.sma200 }}</div></div>
@@ -266,6 +281,148 @@ def detalj(namn):
     </body></html>"""
     return render_template_string(html, namn=namn, s=s, diagram_html=diagram_html,
                                   period_opts=period_opts, range_opts=range_opts)
+
+
+@app.route("/analytiker")
+def analytiker():
+    html = """<!DOCTYPE html><html>
+    <head><title>AI-Analytiker</title><meta charset="utf-8">""" + BASE_STYLE + """
+    <style>
+        .chatt-container { max-width: 800px; }
+        .meddelanden { background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 20px; min-height: 300px; max-height: 500px; overflow-y: auto; margin-bottom: 16px; }
+        .msg { margin-bottom: 16px; }
+        .msg.user { text-align: right; }
+        .msg.user .bubbla { background: #0044cc; color: #fff; display: inline-block; padding: 10px 16px; border-radius: 12px 12px 2px 12px; max-width: 80%; text-align: left; }
+        .msg.ai .bubbla { background: #f0f0f0; color: #222; display: inline-block; padding: 10px 16px; border-radius: 12px 12px 12px 2px; max-width: 80%; }
+        .msg .avsandare { font-size: 0.78em; color: #999; margin-bottom: 4px; }
+        .inmatning { display: flex; gap: 10px; }
+        .inmatning textarea { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.95em; font-family: inherit; resize: vertical; min-height: 80px; }
+        .inmatning button { padding: 10px 20px; background: #0044cc; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 0.95em; align-self: flex-end; }
+        .nyhetsbrev-box { margin-bottom: 16px; }
+        .nyhetsbrev-box label { display: block; color: #666; font-size: 0.85em; margin-bottom: 5px; font-weight: bold; }
+        .nyhetsbrev-box textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.88em; font-family: inherit; resize: vertical; min-height: 100px; }
+        .laddning { color: #0044cc; font-style: italic; font-size: 0.9em; }
+    </style>
+    </head>
+    <body>""" + NAV_HTML + """
+        <h1>AI-Analytiker</h1>
+        <p style="color:#888; margin-bottom:20px; font-size:0.9em;">Klistra in ett nyhetsbrev eller skriv en fråga. Analytikern har tillgång till aktuell marknadsdata.</p>
+
+        <div class="chatt-container">
+            <div class="nyhetsbrev-box">
+                <label>Klistra in nyhetsbrev eller analys (valfritt)</label>
+                <textarea id="nyhetsbrev" placeholder="Klistra in text från nyhetsbrev, analys eller artiklar här..."></textarea>
+            </div>
+
+            <div class="meddelanden" id="meddelanden">
+                <div class="msg ai">
+                    <div class="avsandare">AI-Analytiker</div>
+                    <div class="bubbla">Hej! Jag är din AI-analytiker. Jag har tillgång till aktuell teknisk data för OMX30, S&P500, Europa och Guld. Du kan klistra in ett nyhetsbrev ovan och fråga mig om det, eller bara ställa frågor direkt. Vad vill du veta?</div>
+                </div>
+            </div>
+
+            <div class="inmatning">
+                <textarea id="fraga" placeholder="Skriv din fråga här... t.ex. 'Ser du något köpläge baserat på nuläget?'"></textarea>
+                <button onclick="skicka()">Skicka</button>
+            </div>
+        </div>
+
+        <script>
+        async function skicka() {
+            const fraga = document.getElementById('fraga').value.trim();
+            const nyhetsbrev = document.getElementById('nyhetsbrev').value.trim();
+            if (!fraga) return;
+
+            laggTillMeddelande('user', fraga);
+            document.getElementById('fraga').value = '';
+
+            const laddning = laggTillLaddning();
+
+            try {
+                const svar = await fetch('/analytiker/chatt', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({fraga: fraga, nyhetsbrev: nyhetsbrev})
+                });
+                const data = await svar.json();
+                laddning.remove();
+                laggTillMeddelande('ai', data.svar);
+            } catch(e) {
+                laddning.remove();
+                laggTillMeddelande('ai', 'Något gick fel. Kontrollera att servern körs.');
+            }
+        }
+
+        function laggTillMeddelande(typ, text) {
+            const div = document.createElement('div');
+            div.className = 'msg ' + typ;
+            div.innerHTML = '<div class="avsandare">' + (typ === 'user' ? 'Du' : 'AI-Analytiker') + '</div><div class="bubbla">' + text.replace(/\\n/g, '<br>') + '</div>';
+            document.getElementById('meddelanden').appendChild(div);
+            document.getElementById('meddelanden').scrollTop = 999999;
+        }
+
+        function laggTillLaddning() {
+            const div = document.createElement('div');
+            div.className = 'msg ai';
+            div.innerHTML = '<div class="bubbla laddning">Analyserar...</div>';
+            document.getElementById('meddelanden').appendChild(div);
+            document.getElementById('meddelanden').scrollTop = 999999;
+            return div;
+        }
+
+        document.getElementById('fraga').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); skicka(); }
+        });
+        </script>
+    </body></html>"""
+    return render_template_string(html)
+
+
+@app.route("/analytiker/chatt", methods=["POST"])
+def analytiker_chatt():
+    data       = request.get_json()
+    fraga      = data.get("fraga", "")
+    nyhetsbrev = data.get("nyhetsbrev", "")
+
+    marknadsdata = hamta_marknadsdata()
+
+    system_prompt = f"""Du är en erfaren teknisk analytiker som hjälper en privat investerare med beslut kring index-ETF:er och indexfonder.
+
+Din investeringsstrategi:
+- Swingtrading på index (OMX30, S&P500, Europa, Guld)
+- Teknisk analys baserad på RSI, MACD, SMA50/200, EMA20
+- Max 1-2% kapitalrisk per trade
+- Tidshorisont: veckor till månader
+- Köper vid tekniska köpsignaler, säljer vid mål eller stop-loss
+
+Aktuell marknadsdata (uppdaterad just nu):
+{marknadsdata}
+
+Svara alltid på svenska. Var konkret och praktisk. Om du ser köp- eller säljlägen, säg det tydligt med motivering. Om läget är oklart, säg det. Håll svaren kortfattade men substansrika."""
+
+    meddelanden = []
+
+    if nyhetsbrev:
+        meddelanden.append({
+            "role": "user",
+            "content": f"Jag har fått följande analys/nyhetsbrev:\n\n{nyhetsbrev}\n\nMin fråga: {fraga}"
+        })
+    else:
+        meddelanden.append({
+            "role": "user",
+            "content": fraga
+        })
+
+    try:
+        svar = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=1000,
+            system=system_prompt,
+            messages=meddelanden
+        )
+        return jsonify({"svar": svar.content[0].text})
+    except Exception as e:
+        return jsonify({"svar": f"Fel: {str(e)}"})
 
 
 @app.route("/riskmotor", methods=["GET", "POST"])
@@ -314,7 +471,7 @@ def riskmotor():
     </style></head>
     <body>""" + NAV_HTML + """
         <h1>Riskmotor</h1>
-        <p style="color:#888; margin-bottom:18px; font-size:0.9em;">Beräknar position size baserat på max risk per trade.</p>
+        <p style="color:#888; margin-bottom:18px; font-size:0.9em;">Beraknar position size baserat pa max risk per trade.</p>
         {% if fel %}<p class="fel">{{ fel }}</p>{% endif %}
         <form method="POST">
             <div class="form-grid">
@@ -323,7 +480,7 @@ def riskmotor():
                 <div class="form-group"><label>Entry-pris</label><input type="text" name="entry" placeholder="2200" value="{{ request.form.get('entry', '') }}"></div>
                 <div class="form-group"><label>Stop-loss</label><input type="text" name="stop" placeholder="2150" value="{{ request.form.get('stop', '') }}"></div>
             </div>
-            <button class="submit-btn" type="submit">Beräkna</button>
+            <button class="submit-btn" type="submit">Berakna</button>
         </form>
         {% if resultat %}
         <br>
@@ -332,9 +489,9 @@ def riskmotor():
             <div class="resultat-rad"><span class="resultat-etikett">Risk per enhet</span><span class="resultat-varde">{{ "%.2f"|format(resultat.risk_per_enhet) }}</span></div>
             <div class="resultat-rad"><span class="resultat-etikett">Position size</span><span class="resultat-varde stor">{{ resultat.position_size }} enheter</span></div>
             <div class="resultat-rad"><span class="resultat-etikett">Stop-loss</span><span class="resultat-varde" style="color:#cc0000;">{{ resultat.stop }}</span></div>
-            <div class="resultat-rad"><span class="resultat-etikett">Target 1R (1:1)</span><span class="resultat-varde" style="color:#007700;">{{ resultat.target_1r }} &nbsp;+{{ "{:,.0f}".format(resultat.vinst_1r) }} SEK</span></div>
-            <div class="resultat-rad"><span class="resultat-etikett">Target 2R (1:2)</span><span class="resultat-varde" style="color:#007700;">{{ resultat.target_2r }} &nbsp;+{{ "{:,.0f}".format(resultat.vinst_2r) }} SEK</span></div>
-            <div class="resultat-rad"><span class="resultat-etikett">Target 3R (1:3)</span><span class="resultat-varde" style="color:#007700;">{{ resultat.target_3r }} &nbsp;+{{ "{:,.0f}".format(resultat.vinst_3r) }} SEK</span></div>
+            <div class="resultat-rad"><span class="resultat-etikett">Target 1R (1:1)</span><span class="resultat-varde" style="color:#007700;">{{ resultat.target_1r }} +{{ "{:,.0f}".format(resultat.vinst_1r) }} SEK</span></div>
+            <div class="resultat-rad"><span class="resultat-etikett">Target 2R (1:2)</span><span class="resultat-varde" style="color:#007700;">{{ resultat.target_2r }} +{{ "{:,.0f}".format(resultat.vinst_2r) }} SEK</span></div>
+            <div class="resultat-rad"><span class="resultat-etikett">Target 3R (1:3)</span><span class="resultat-varde" style="color:#007700;">{{ resultat.target_3r }} +{{ "{:,.0f}".format(resultat.vinst_3r) }} SEK</span></div>
         </div>
         {% endif %}
     </body></html>"""
