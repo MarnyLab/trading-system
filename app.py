@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request, jsonify, redirect, url_for, session
 import yfinance as yf
 import ta
 import pandas as pd
@@ -8,12 +8,28 @@ from plotly.subplots import make_subplots
 import anthropic
 import os
 from dotenv import load_dotenv
+from functools import wraps
 
 load_dotenv()
 
 app = Flask(__name__)
+app.secret_key = "trading-system-secret-2026"
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
+# ── Login ──────────────────────────────────────────────────
+ANVANDARE = {
+    "admin": "trading2026"
+}
+
+def inloggning_kravs(f):
+    @wraps(f)
+    def dekorerad(*args, **kwargs):
+        if not session.get("inloggad"):
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return dekorerad
+
+# ── Konfiguration ──────────────────────────────────────────
 TICKERS = {
     "OMX30":   "^OMX",
     "S&P500":  "^GSPC",
@@ -168,10 +184,11 @@ def skapa_diagram(namn, df, interval_label="Daily"):
 
 
 NAV_HTML = """
-<nav style="margin-bottom:25px; display:flex; gap:12px;">
+<nav style="margin-bottom:25px; display:flex; gap:12px; align-items:center;">
     <a href="/" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Dashboard</a>
     <a href="/analytiker" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">AI-Analytiker</a>
     <a href="/riskmotor" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Riskmotor</a>
+    <a href="/logout" style="color:#999; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em; margin-left:auto;">Logga ut</a>
 </nav>
 """
 
@@ -189,7 +206,60 @@ BASE_STYLE = """
 </style>
 """
 
+# ── Login/Logout routes ────────────────────────────────────
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    fel = None
+    if request.method == "POST":
+        anv = request.form.get("anvandare")
+        pwd = request.form.get("losenord")
+        if anv in ANVANDARE and ANVANDARE[anv] == pwd:
+            session["inloggad"] = True
+            session["anvandare"] = anv
+            return redirect(url_for("dashboard"))
+        else:
+            fel = "Fel användarnamn eller lösenord."
+
+    html = """<!DOCTYPE html><html>
+    <head><title>Logga in</title><meta charset="utf-8">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #f4f4f4; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .login-box { background: #fff; border-radius: 12px; padding: 40px; width: 340px; border: 1px solid #ddd; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+        h1 { font-size: 1.4em; margin-bottom: 8px; color: #111; }
+        p { color: #888; font-size: 0.88em; margin-bottom: 24px; }
+        label { display: block; color: #666; font-size: 0.83em; font-weight: bold; margin-bottom: 5px; }
+        input { width: 100%; padding: 10px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 1em; margin-bottom: 16px; }
+        input:focus { outline: none; border-color: #0044cc; }
+        button { width: 100%; padding: 11px; background: #0044cc; color: #fff; border: none; border-radius: 6px; font-size: 1em; font-weight: bold; cursor: pointer; }
+        button:hover { background: #0033aa; }
+        .fel { color: #cc0000; font-size: 0.88em; margin-bottom: 14px; }
+    </style>
+    </head>
+    <body>
+        <div class="login-box">
+            <h1>Trading Dashboard</h1>
+            <p>Logga in för att fortsätta</p>
+            {% if fel %}<p class="fel">{{ fel }}</p>{% endif %}
+            <form method="POST">
+                <label>Användarnamn</label>
+                <input type="text" name="anvandare" placeholder="admin" autofocus>
+                <label>Lösenord</label>
+                <input type="password" name="losenord" placeholder="••••••••">
+                <button type="submit">Logga in</button>
+            </form>
+        </div>
+    </body></html>"""
+    return render_template_string(html, fel=fel)
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+# ── Dashboard ──────────────────────────────────────────────
 @app.route("/")
+@inloggning_kravs
 def dashboard():
     kort = []
     for namn, ticker in TICKERS.items():
@@ -234,6 +304,7 @@ def dashboard():
 
 
 @app.route("/detalj/<namn>")
+@inloggning_kravs
 def detalj(namn):
     ticker = TICKERS.get(namn)
     if not ticker:
@@ -284,6 +355,7 @@ def detalj(namn):
 
 
 @app.route("/analytiker")
+@inloggning_kravs
 def analytiker():
     html = """<!DOCTYPE html><html>
     <head><title>AI-Analytiker</title><meta charset="utf-8">""" + BASE_STYLE + """
@@ -302,42 +374,34 @@ def analytiker():
         .nyhetsbrev-box label { display: block; color: #666; font-size: 0.85em; margin-bottom: 5px; font-weight: bold; }
         .nyhetsbrev-box textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.88em; font-family: inherit; resize: vertical; min-height: 100px; }
         .laddning { color: #0044cc; font-style: italic; font-size: 0.9em; }
-    </style>
-    </head>
+    </style></head>
     <body>""" + NAV_HTML + """
         <h1>AI-Analytiker</h1>
         <p style="color:#888; margin-bottom:20px; font-size:0.9em;">Klistra in ett nyhetsbrev eller skriv en fråga. Analytikern har tillgång till aktuell marknadsdata.</p>
-
         <div class="chatt-container">
             <div class="nyhetsbrev-box">
                 <label>Klistra in nyhetsbrev eller analys (valfritt)</label>
                 <textarea id="nyhetsbrev" placeholder="Klistra in text från nyhetsbrev, analys eller artiklar här..."></textarea>
             </div>
-
             <div class="meddelanden" id="meddelanden">
                 <div class="msg ai">
                     <div class="avsandare">AI-Analytiker</div>
                     <div class="bubbla">Hej! Jag är din AI-analytiker. Jag har tillgång till aktuell teknisk data för OMX30, S&P500, Europa och Guld. Du kan klistra in ett nyhetsbrev ovan och fråga mig om det, eller bara ställa frågor direkt. Vad vill du veta?</div>
                 </div>
             </div>
-
             <div class="inmatning">
-                <textarea id="fraga" placeholder="Skriv din fråga här... t.ex. 'Ser du något köpläge baserat på nuläget?'"></textarea>
+                <textarea id="fraga" placeholder="Skriv din fråga här..."></textarea>
                 <button onclick="skicka()">Skicka</button>
             </div>
         </div>
-
         <script>
         async function skicka() {
             const fraga = document.getElementById('fraga').value.trim();
             const nyhetsbrev = document.getElementById('nyhetsbrev').value.trim();
             if (!fraga) return;
-
             laggTillMeddelande('user', fraga);
             document.getElementById('fraga').value = '';
-
             const laddning = laggTillLaddning();
-
             try {
                 const svar = await fetch('/analytiker/chatt', {
                     method: 'POST',
@@ -352,7 +416,6 @@ def analytiker():
                 laggTillMeddelande('ai', 'Något gick fel. Kontrollera att servern körs.');
             }
         }
-
         function laggTillMeddelande(typ, text) {
             const div = document.createElement('div');
             div.className = 'msg ' + typ;
@@ -360,7 +423,6 @@ def analytiker():
             document.getElementById('meddelanden').appendChild(div);
             document.getElementById('meddelanden').scrollTop = 999999;
         }
-
         function laggTillLaddning() {
             const div = document.createElement('div');
             div.className = 'msg ai';
@@ -369,7 +431,6 @@ def analytiker():
             document.getElementById('meddelanden').scrollTop = 999999;
             return div;
         }
-
         document.getElementById('fraga').addEventListener('keydown', function(e) {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); skicka(); }
         });
@@ -379,13 +440,12 @@ def analytiker():
 
 
 @app.route("/analytiker/chatt", methods=["POST"])
+@inloggning_kravs
 def analytiker_chatt():
     data       = request.get_json()
     fraga      = data.get("fraga", "")
     nyhetsbrev = data.get("nyhetsbrev", "")
-
     marknadsdata = hamta_marknadsdata()
-
     system_prompt = f"""Du är en erfaren teknisk analytiker som hjälper en privat investerare med beslut kring index-ETF:er och indexfonder.
 
 Din investeringsstrategi:
@@ -393,29 +453,21 @@ Din investeringsstrategi:
 - Teknisk analys baserad på RSI, MACD, SMA50/200, EMA20
 - Max 1-2% kapitalrisk per trade
 - Tidshorisont: veckor till månader
-- Köper vid tekniska köpsignaler, säljer vid mål eller stop-loss
 
-Aktuell marknadsdata (uppdaterad just nu):
+Aktuell marknadsdata:
 {marknadsdata}
 
-Svara alltid på svenska. Var konkret och praktisk. Om du ser köp- eller säljlägen, säg det tydligt med motivering. Om läget är oklart, säg det. Håll svaren kortfattade men substansrika."""
+Svara alltid på svenska. Var konkret och praktisk. Om du ser köp- eller säljlägen, säg det tydligt med motivering."""
 
     meddelanden = []
-
     if nyhetsbrev:
-        meddelanden.append({
-            "role": "user",
-            "content": f"Jag har fått följande analys/nyhetsbrev:\n\n{nyhetsbrev}\n\nMin fråga: {fraga}"
-        })
+        meddelanden.append({"role": "user", "content": f"Nyhetsbrev:\n\n{nyhetsbrev}\n\nFråga: {fraga}"})
     else:
-        meddelanden.append({
-            "role": "user",
-            "content": fraga
-        })
+        meddelanden.append({"role": "user", "content": fraga})
 
     try:
         svar = client.messages.create(
-            model="claude-opus-4-6",
+            model="claude-sonnet-4-6",
             max_tokens=1000,
             system=system_prompt,
             messages=meddelanden
@@ -426,6 +478,7 @@ Svara alltid på svenska. Var konkret och praktisk. Om du ser köp- eller säljl
 
 
 @app.route("/riskmotor", methods=["GET", "POST"])
+@inloggning_kravs
 def riskmotor():
     resultat = None
     fel = None
