@@ -7,7 +7,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import anthropic
 import os
-import sys
+import sqlite3
+import json
 from dotenv import load_dotenv
 from functools import wraps
 
@@ -17,10 +18,85 @@ app = Flask(__name__)
 app.secret_key = "trading-system-secret-2026"
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
+# ── Databas ────────────────────────────────────────────────
+DB_PATH = "trading.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS konversationer (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            datum TEXT NOT NULL,
+            titel TEXT,
+            meddelanden TEXT NOT NULL,
+            marknadsdata TEXT,
+            skapad TEXT NOT NULL
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS dokument (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filnamn TEXT NOT NULL,
+            innehall TEXT NOT NULL,
+            uppladdad TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def spara_konversation(titel, meddelanden, marknadsdata):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    datum  = datetime.now().strftime("%Y-%m-%d")
+    skapad = datetime.now().strftime("%Y-%m-%d %H:%M")
+    c.execute(
+        "INSERT INTO konversationer (datum, titel, meddelanden, marknadsdata, skapad) VALUES (?, ?, ?, ?, ?)",
+        (datum, titel, json.dumps(meddelanden, ensure_ascii=False), marknadsdata, skapad)
+    )
+    conn.commit()
+    conn.close()
+
+def hamta_tidigare_konversationer(antal=3):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT datum, titel, meddelanden, marknadsdata FROM konversationer ORDER BY id DESC LIMIT ?", (antal,))
+    rader = c.fetchall()
+    conn.close()
+    resultat = []
+    for rad in rader:
+        msgs = json.loads(rad[2])
+        resultat.append({"datum": rad[0], "titel": rad[1], "meddelanden": msgs, "marknadsdata": rad[3]})
+    return resultat
+
+def hamta_alla_konversationer():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, datum, titel, skapad FROM konversationer ORDER BY id DESC")
+    rader = c.fetchall()
+    conn.close()
+    return [{"id": r[0], "datum": r[1], "titel": r[2], "skapad": r[3]} for r in rader]
+
+def spara_dokument(filnamn, innehall):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    uppladdad = datetime.now().strftime("%Y-%m-%d %H:%M")
+    c.execute("INSERT INTO dokument (filnamn, innehall, uppladdad) VALUES (?, ?, ?)", (filnamn, innehall, uppladdad))
+    conn.commit()
+    conn.close()
+
+def hamta_alla_dokument():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, filnamn, uppladdad FROM dokument ORDER BY id DESC")
+    rader = c.fetchall()
+    conn.close()
+    return [{"id": r[0], "filnamn": r[1], "uppladdad": r[2]} for r in rader]
+
 # ── Login ──────────────────────────────────────────────────
-ANVANDARE = {
-    "admin": "trading2026"
-}
+ANVANDARE = {"admin": "trading2026"}
 
 def inloggning_kravs(f):
     @wraps(f)
@@ -30,28 +106,18 @@ def inloggning_kravs(f):
         return f(*args, **kwargs)
     return dekorerad
 
-# ── Konfiguration ──────────────────────────────────────────
+# ── Marknadsdata ───────────────────────────────────────────
 TICKERS = {
-    "OMX30":   "^OMX",
-    "S&P500":  "^GSPC",
-    "Europa":  "^STOXX50E",
-    "Guld":    "GC=F",
+    "OMX30":  "^OMX",
+    "S&P500": "^GSPC",
+    "Europa": "^STOXX50E",
+    "Guld":   "GC=F",
 }
 
-PERIOD_MAP = {
-    "Daily":   "1d",
-    "Weekly":  "1wk",
-    "Monthly": "1mo",
-}
-
-RANGE_MAP = {
-    "1 Month":  "1mo",
-    "3 Months": "3mo",
-    "6 Months": "6mo",
-    "1 Year":   "1y",
-    "2 Years":  "2y",
-    "3 Years":  "3y",
-    "5 Years":  "5y",
+PERIOD_MAP = {"Daily": "1d", "Weekly": "1wk", "Monthly": "1mo"}
+RANGE_MAP  = {
+    "1 Month": "1mo", "3 Months": "3mo", "6 Months": "6mo",
+    "1 Year": "1y", "2 Years": "2y", "3 Years": "3y", "5 Years": "5y",
 }
 
 def hamta_data(ticker, yf_period="6mo", yf_interval="1d"):
@@ -64,7 +130,7 @@ def hamta_data(ticker, yf_period="6mo", yf_interval="1d"):
         df["SMA50"] = ta.trend.SMAIndicator(close, window=50).sma_indicator()
     if len(df) > 200:
         df["SMA200"] = ta.trend.SMAIndicator(close, window=200).sma_indicator()
-    macd            = ta.trend.MACD(close)
+    macd = ta.trend.MACD(close)
     df["MACD"]      = macd.macd()
     df["MACD_sig"]  = macd.macd_signal()
     df["MACD_hist"] = macd.macd_diff()
@@ -82,65 +148,47 @@ def sammanfatta(namn, df):
     sma50        = float(df["SMA50"].iloc[-1]) if "SMA50" in df.columns else None
     sma200       = float(df["SMA200"].iloc[-1]) if "SMA200" in df.columns else None
     macd_hist    = float(df["MACD_hist"].iloc[-1])
-    if rsi > 70:
-        rsi_text, rsi_farg = "Överköpt", "#cc0000"
-    elif rsi < 30:
-        rsi_text, rsi_farg = "Översålt", "#007700"
-    else:
-        rsi_text, rsi_farg = "Neutralt", "#888888"
+    rsi_text, rsi_farg = ("Överköpt", "#cc0000") if rsi > 70 else ("Översålt", "#007700") if rsi < 30 else ("Neutralt", "#888888")
     if sma50 and sma200:
-        if senaste > sma50 > sma200:
-            trend, trend_farg = "Stark upptrend", "#007700"
-        elif senaste > sma50:
-            trend, trend_farg = "Upptrend", "#009900"
-        elif senaste < sma50 < sma200:
-            trend, trend_farg = "Stark nedtrend", "#cc0000"
-        else:
-            trend, trend_farg = "Sidledes", "#888888"
+        if senaste > sma50 > sma200:   trend, trend_farg = "Stark upptrend", "#007700"
+        elif senaste > sma50:          trend, trend_farg = "Upptrend", "#009900"
+        elif senaste < sma50 < sma200: trend, trend_farg = "Stark nedtrend", "#cc0000"
+        else:                          trend, trend_farg = "Sidledes", "#888888"
     else:
         trend, trend_farg = "För kort data", "#888888"
-    macd_signal = "Positiv momentum" if macd_hist > 0 else "Negativ momentum"
     return {
         "namn": namn, "kurs": senaste, "forandring": forandring,
         "rsi": rsi, "rsi_text": rsi_text, "rsi_farg": rsi_farg,
-        "trend": trend, "trend_farg": trend_farg, "macd_signal": macd_signal,
+        "trend": trend, "trend_farg": trend_farg,
+        "macd_signal": "Positiv momentum" if macd_hist > 0 else "Negativ momentum",
         "sma50": round(sma50, 2) if sma50 else "N/A",
         "sma200": round(sma200, 2) if sma200 else "N/A",
         "macd_hist": round(macd_hist, 2),
     }
 
 def hamta_marknadsdata():
-    sammanfattningar = []
+    rader = []
     for namn, ticker in TICKERS.items():
         try:
             df = hamta_data(ticker, yf_period="3mo", yf_interval="1d")
-            s = sammanfatta(namn, df)
-            sammanfattningar.append(
+            s  = sammanfatta(namn, df)
+            rader.append(
                 f"{namn}: Kurs {s['kurs']:.2f}, RSI {s['rsi']} ({s['rsi_text']}), "
                 f"Trend: {s['trend']}, MACD: {s['macd_signal']}, "
                 f"SMA50: {s['sma50']}, SMA200: {s['sma200']}"
             )
         except:
             pass
-    return "\n".join(sammanfattningar)
+    return "\n".join(rader)
 
 def skapa_diagram(namn, df, interval_label="Daily"):
-    if interval_label == "Daily":
-        x_labels = [d.strftime("%d %b") for d in df.index]
-    elif interval_label == "Weekly":
-        x_labels = [d.strftime("%d %b '%y") for d in df.index]
-    else:
-        x_labels = [d.strftime("%b '%y") for d in df.index]
+    fmt = {"Daily": "%d %b", "Weekly": "%d %b '%y", "Monthly": "%b '%y"}
+    x_labels = [d.strftime(fmt.get(interval_label, "%d %b")) for d in df.index]
+    close, open_ = df["Close"].squeeze(), df["Open"].squeeze()
 
-    close = df["Close"].squeeze()
-    open_ = df["Open"].squeeze()
-
-    fig = make_subplots(
-        rows=3, cols=1, shared_xaxes=True,
-        row_heights=[0.60, 0.20, 0.20],
-        vertical_spacing=0.02,
-        subplot_titles=("", "Volym", "MACD (12,26,9)")
-    )
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
+                        row_heights=[0.60, 0.20, 0.20], vertical_spacing=0.02,
+                        subplot_titles=("", "Volym", "MACD (12,26,9)"))
 
     fig.add_trace(go.Candlestick(
         x=x_labels, open=open_, high=df["High"].squeeze(),
@@ -149,12 +197,9 @@ def skapa_diagram(namn, df, interval_label="Daily"):
         decreasing=dict(line=dict(color="#cc0000", width=1.5), fillcolor="#cc0000"),
     ), row=1, col=1)
 
-    if "EMA20" in df.columns:
-        fig.add_trace(go.Scatter(x=x_labels, y=df["EMA20"], name="EMA(20)", line=dict(color="#008800", width=1.5)), row=1, col=1)
-    if "SMA50" in df.columns:
-        fig.add_trace(go.Scatter(x=x_labels, y=df["SMA50"], name="MA(50)", line=dict(color="#0044cc", width=1.5)), row=1, col=1)
-    if "SMA200" in df.columns:
-        fig.add_trace(go.Scatter(x=x_labels, y=df["SMA200"], name="MA(200)", line=dict(color="#cc0000", width=1.5)), row=1, col=1)
+    for col_name, color, label in [("EMA20","#008800","EMA(20)"),("SMA50","#0044cc","MA(50)"),("SMA200","#cc0000","MA(200)")]:
+        if col_name in df.columns:
+            fig.add_trace(go.Scatter(x=x_labels, y=df[col_name], name=label, line=dict(color=color, width=1.5)), row=1, col=1)
 
     if "Volume" in df.columns:
         vol_colors = ["#cc6688" if c < o else "#88aa88" for c, o in zip(close, open_)]
@@ -184,10 +229,13 @@ def skapa_diagram(namn, df, interval_label="Daily"):
     return fig.to_html(full_html=False, include_plotlyjs="cdn")
 
 
+# ── HTML Komponenter ───────────────────────────────────────
 NAV_HTML = """
-<nav style="margin-bottom:25px; display:flex; gap:12px; align-items:center;">
+<nav style="margin-bottom:25px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
     <a href="/" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Dashboard</a>
     <a href="/analytiker" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">AI-Analytiker</a>
+    <a href="/analyslogg" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Analyslogg</a>
+    <a href="/dokument" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Dokument</a>
     <a href="/riskmotor" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Riskmotor</a>
     <a href="/logout" style="color:#999; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em; margin-left:auto;">Logga ut</a>
 </nav>
@@ -198,16 +246,24 @@ BASE_STYLE = """
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Segoe UI', Arial, sans-serif; background: #f4f4f4; color: #222; padding: 30px; }
     h1 { font-size: 1.5em; margin-bottom: 5px; color: #111; }
+    h2 { font-size: 1.1em; color: #444; margin-bottom: 15px; }
     .uppdaterad { color: #999; font-size: 0.85em; margin-bottom: 25px; }
     a { color: #0044cc; }
     .filter-bar { display: flex; gap: 20px; align-items: flex-end; margin-bottom: 18px; flex-wrap: wrap; }
     .filter-bar label { color: #666; font-size: 0.82em; font-weight: bold; display: block; margin-bottom: 3px; }
     .filter-bar select { padding: 6px 10px; border: 1px solid #ccc; border-radius: 5px; background: #fff; font-size: 0.9em; color: #222; cursor: pointer; }
     .filter-bar button { padding: 7px 18px; background: #0044cc; color: #fff; border: none; border-radius: 5px; font-size: 0.9em; cursor: pointer; }
+    .kort { background: #fff; border-radius: 10px; padding: 20px; border: 1px solid #ddd; }
+    .tabell { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; }
+    .tabell th { background: #f0f0f0; padding: 10px 14px; text-align: left; font-size: 0.85em; color: #666; border-bottom: 1px solid #ddd; }
+    .tabell td { padding: 10px 14px; border-bottom: 1px solid #eee; font-size: 0.9em; }
+    .tabell tr:last-child td { border-bottom: none; }
+    .tabell tr:hover td { background: #f8f8f8; }
 </style>
 """
 
-# ── Login/Logout routes ────────────────────────────────────
+# ── Routes ─────────────────────────────────────────────────
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     fel = None
@@ -220,7 +276,6 @@ def login():
             return redirect(url_for("dashboard"))
         else:
             fel = "Fel användarnamn eller lösenord."
-
     html = """<!DOCTYPE html><html>
     <head><title>Logga in</title><meta charset="utf-8">
     <style>
@@ -233,10 +288,8 @@ def login():
         input { width: 100%; padding: 10px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 1em; margin-bottom: 16px; }
         input:focus { outline: none; border-color: #0044cc; }
         button { width: 100%; padding: 11px; background: #0044cc; color: #fff; border: none; border-radius: 6px; font-size: 1em; font-weight: bold; cursor: pointer; }
-        button:hover { background: #0033aa; }
         .fel { color: #cc0000; font-size: 0.88em; margin-bottom: 14px; }
-    </style>
-    </head>
+    </style></head>
     <body>
         <div class="login-box">
             <h1>Trading Dashboard</h1>
@@ -258,7 +311,6 @@ def logout():
     session.clear()
     return redirect(url_for("login"))
 
-# ── Dashboard ──────────────────────────────────────────────
 @app.route("/")
 @inloggning_kravs
 def dashboard():
@@ -271,8 +323,6 @@ def dashboard():
     <head><title>Trading Dashboard</title><meta charset="utf-8">""" + BASE_STYLE + """
     <style>
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
-        .kort { background: #fff; border-radius: 10px; padding: 20px; border: 1px solid #ddd; }
-        .kort h2 { font-size: 1em; color: #666; margin-bottom: 6px; }
         .kurs { font-size: 1.9em; font-weight: bold; color: #111; }
         .forandring { font-size: 0.95em; margin: 3px 0 14px; }
         .rad { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee; font-size: 0.88em; }
@@ -286,7 +336,7 @@ def dashboard():
         <div class="grid">
         {% for k in kort %}
             <div class="kort">
-                <h2>{{ k.namn }}</h2>
+                <h2 style="color:#666; font-size:1em; margin-bottom:6px;">{{ k.namn }}</h2>
                 <div class="kurs">{{ "%.2f"|format(k.kurs) }}</div>
                 <div class="forandring" style="color: {{ '#007700' if k.forandring > 0 else '#cc0000' }}">
                     {{ "%+.2f"|format(k.forandring) }}% senaste månaden
@@ -296,7 +346,7 @@ def dashboard():
                 <div class="rad"><span class="etikett">MACD</span><span>{{ k.macd_signal }}</span></div>
                 <div class="rad"><span class="etikett">SMA50</span><span>{{ k.sma50 }}</span></div>
                 <div class="rad"><span class="etikett">SMA200</span><span>{{ k.sma200 }}</span></div>
-                <a class="detalj-btn" href="/detalj/{{ k.namn }}" target="_blank">Oppna diagram</a>
+                <a class="detalj-btn" href="/detalj/{{ k.namn }}" target="_blank">Öppna diagram</a>
             </div>
         {% endfor %}
         </div>
@@ -313,10 +363,8 @@ def detalj(namn):
     aktiv_period = request.args.get("period", "Daily")
     aktiv_range  = request.args.get("range", "6 Months")
     if aktiv_period not in PERIOD_MAP: aktiv_period = "Daily"
-    if aktiv_range not in RANGE_MAP: aktiv_range = "6 Months"
-    yf_interval = PERIOD_MAP[aktiv_period]
-    yf_period   = RANGE_MAP[aktiv_range]
-    df = hamta_data(ticker, yf_period=yf_period, yf_interval=yf_interval)
+    if aktiv_range not in RANGE_MAP:   aktiv_range  = "6 Months"
+    df = hamta_data(ticker, yf_period=RANGE_MAP[aktiv_range], yf_interval=PERIOD_MAP[aktiv_period])
     s  = sammanfatta(namn, df)
     diagram_html = skapa_diagram(namn, df, interval_label=aktiv_period)
     period_opts = "".join(f'<option value="{p}" {"selected" if p == aktiv_period else ""}>{p}</option>' for p in PERIOD_MAP)
@@ -358,48 +406,92 @@ def detalj(namn):
 @app.route("/analytiker")
 @inloggning_kravs
 def analytiker():
+    dokument = hamta_alla_dokument()
+    dok_opts = "".join(f'<option value="{d["id"]}">{d["filnamn"]} ({d["uppladdad"]})</option>' for d in dokument)
+
     html = """<!DOCTYPE html><html>
     <head><title>AI-Analytiker</title><meta charset="utf-8">""" + BASE_STYLE + """
     <style>
-        .chatt-container { max-width: 800px; }
-        .meddelanden { background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 20px; min-height: 300px; max-height: 500px; overflow-y: auto; margin-bottom: 16px; }
+        .chatt-wrapper { display: grid; grid-template-columns: 1fr 300px; gap: 20px; max-width: 1100px; }
+        .meddelanden { background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 20px; min-height: 350px; max-height: 520px; overflow-y: auto; margin-bottom: 16px; }
         .msg { margin-bottom: 16px; }
         .msg.user { text-align: right; }
-        .msg.user .bubbla { background: #0044cc; color: #fff; display: inline-block; padding: 10px 16px; border-radius: 12px 12px 2px 12px; max-width: 80%; text-align: left; }
-        .msg.ai .bubbla { background: #f0f0f0; color: #222; display: inline-block; padding: 10px 16px; border-radius: 12px 12px 12px 2px; max-width: 80%; }
+        .msg.user .bubbla { background: #0044cc; color: #fff; display: inline-block; padding: 10px 16px; border-radius: 12px 12px 2px 12px; max-width: 85%; text-align: left; }
+        .msg.ai .bubbla { background: #f0f0f0; color: #222; display: inline-block; padding: 10px 16px; border-radius: 12px 12px 12px 2px; max-width: 85%; }
         .msg .avsandare { font-size: 0.78em; color: #999; margin-bottom: 4px; }
         .inmatning { display: flex; gap: 10px; }
-        .inmatning textarea { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.95em; font-family: inherit; resize: vertical; min-height: 80px; }
+        .inmatning textarea { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.95em; font-family: inherit; resize: vertical; min-height: 70px; }
         .inmatning button { padding: 10px 20px; background: #0044cc; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 0.95em; align-self: flex-end; }
-        .nyhetsbrev-box { margin-bottom: 16px; }
-        .nyhetsbrev-box label { display: block; color: #666; font-size: 0.85em; margin-bottom: 5px; font-weight: bold; }
-        .nyhetsbrev-box textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.88em; font-family: inherit; resize: vertical; min-height: 100px; }
-        .laddning { color: #0044cc; font-style: italic; font-size: 0.9em; }
+        .sidopanel { display: flex; flex-direction: column; gap: 14px; }
+        .panel-kort { background: #fff; border-radius: 10px; padding: 16px; border: 1px solid #ddd; }
+        .panel-kort h3 { font-size: 0.88em; color: #555; margin-bottom: 10px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.03em; }
+        .panel-kort label { display: block; color: #888; font-size: 0.82em; margin-bottom: 4px; }
+        .panel-kort select { width: 100%; padding: 6px 8px; border: 1px solid #ccc; border-radius: 5px; font-size: 0.88em; margin-bottom: 8px; }
+        .panel-kort textarea { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 5px; font-size: 0.85em; resize: vertical; min-height: 80px; font-family: inherit; }
+        .panel-kort input[type=text] { width: 100%; padding: 7px 8px; border: 1px solid #ccc; border-radius: 5px; font-size: 0.88em; margin-bottom: 8px; }
+        .panel-kort input[type=file] { width: 100%; font-size: 0.85em; margin-bottom: 8px; }
+        .grön-btn { width: 100%; padding: 7px; background: #007700; color: #fff; border: none; border-radius: 5px; cursor: pointer; font-size: 0.88em; }
+        .blå-btn { width: 100%; padding: 7px; background: #0044cc; color: #fff; border: none; border-radius: 5px; cursor: pointer; font-size: 0.88em; }
+        .status { font-size: 0.82em; color: #888; margin-top: 6px; }
+        .laddning { color: #0044cc; font-style: italic; }
     </style></head>
     <body>""" + NAV_HTML + """
         <h1>AI-Analytiker</h1>
-        <p style="color:#888; margin-bottom:20px; font-size:0.9em;">Klistra in ett nyhetsbrev eller skriv en fråga. Analytikern har tillgång till aktuell marknadsdata.</p>
-        <div class="chatt-container">
-            <div class="nyhetsbrev-box">
-                <label>Klistra in nyhetsbrev eller analys (valfritt)</label>
-                <textarea id="nyhetsbrev" placeholder="Klistra in text från nyhetsbrev, analys eller artiklar här..."></textarea>
-            </div>
-            <div class="meddelanden" id="meddelanden">
-                <div class="msg ai">
-                    <div class="avsandare">AI-Analytiker</div>
-                    <div class="bubbla">Hej! Jag är din AI-analytiker. Jag har tillgång till aktuell teknisk data för OMX30, S&P500, Europa och Guld. Du kan klistra in ett nyhetsbrev ovan och fråga mig om det, eller bara ställa frågor direkt. Vad vill du veta?</div>
+        <p style="color:#888; margin-bottom:20px; font-size:0.9em;">Analytikern minns tidigare konversationer och har tillgång till live-marknadsdata.</p>
+
+        <div class="chatt-wrapper">
+            <div>
+                <div class="meddelanden" id="meddelanden">
+                    <div class="msg ai">
+                        <div class="avsandare">AI-Analytiker</div>
+                        <div class="bubbla">Hej! Jag minns våra tidigare analyser och har tillgång till aktuell marknadsdata. Vad vill du analysera idag?</div>
+                    </div>
+                </div>
+                <div class="inmatning">
+                    <textarea id="fraga" placeholder="Skriv din fråga... (Enter = skicka, Shift+Enter = ny rad)"></textarea>
+                    <button onclick="skicka()">Skicka</button>
                 </div>
             </div>
-            <div class="inmatning">
-                <textarea id="fraga" placeholder="Skriv din fråga här..."></textarea>
-                <button onclick="skicka()">Skicka</button>
+
+            <div class="sidopanel">
+                <div class="panel-kort">
+                    <h3>Ladda upp dokument</h3>
+                    <input type="file" id="fil" accept=".pdf,.txt">
+                    <button class="blå-btn" onclick="laddaUpp()">Ladda upp</button>
+                    <p id="upload-status" class="status"></p>
+                </div>
+
+                <div class="panel-kort">
+                    <h3>Använd dokument</h3>
+                    <select id="valt-dokument">
+                        <option value="">-- Inget --</option>
+                        """ + dok_opts + """
+                    </select>
+                </div>
+
+                <div class="panel-kort">
+                    <h3>Klistra in text</h3>
+                    <textarea id="nyhetsbrev" placeholder="Nyhetsbrev, artikel..."></textarea>
+                </div>
+
+                <div class="panel-kort">
+                    <h3>Spara konversation</h3>
+                    <input type="text" id="konv-titel" placeholder="t.ex. OMX-analys mars 2026">
+                    <button class="grön-btn" onclick="sparaKonversation()">Spara till logg</button>
+                    <p id="spara-status" class="status"></p>
+                </div>
             </div>
         </div>
+
         <script>
+        let chattHistorik = [];
+
         async function skicka() {
             const fraga = document.getElementById('fraga').value.trim();
             const nyhetsbrev = document.getElementById('nyhetsbrev').value.trim();
+            const valtDok = document.getElementById('valt-dokument').value;
             if (!fraga) return;
+            chattHistorik.push({roll: 'user', text: fraga});
             laggTillMeddelande('user', fraga);
             document.getElementById('fraga').value = '';
             const laddning = laggTillLaddning();
@@ -407,16 +499,49 @@ def analytiker():
                 const svar = await fetch('/analytiker/chatt', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({fraga: fraga, nyhetsbrev: nyhetsbrev})
+                    body: JSON.stringify({fraga, nyhetsbrev, dokument_id: valtDok, historik: chattHistorik})
                 });
                 const data = await svar.json();
                 laddning.remove();
+                chattHistorik.push({roll: 'assistant', text: data.svar});
                 laggTillMeddelande('ai', data.svar);
             } catch(e) {
                 laddning.remove();
-                laggTillMeddelande('ai', 'Något gick fel. Kontrollera att servern körs.');
+                laggTillMeddelande('ai', 'Något gick fel.');
             }
         }
+
+        async function laddaUpp() {
+            const fil = document.getElementById('fil').files[0];
+            if (!fil) return;
+            document.getElementById('upload-status').textContent = 'Laddar upp...';
+            const formData = new FormData();
+            formData.append('fil', fil);
+            try {
+                const svar = await fetch('/dokument/ladda-upp', {method: 'POST', body: formData});
+                const data = await svar.json();
+                document.getElementById('upload-status').textContent = data.meddelande;
+                setTimeout(() => location.reload(), 1500);
+            } catch(e) {
+                document.getElementById('upload-status').textContent = 'Misslyckades.';
+            }
+        }
+
+        async function sparaKonversation() {
+            const titel = document.getElementById('konv-titel').value.trim() || 'Analys ' + new Date().toLocaleDateString('sv-SE');
+            if (chattHistorik.length === 0) {
+                document.getElementById('spara-status').textContent = 'Ingen konversation att spara.';
+                return;
+            }
+            const svar = await fetch('/analytiker/spara', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({titel, historik: chattHistorik})
+            });
+            const data = await svar.json();
+            document.getElementById('spara-status').textContent = data.meddelande;
+        }
+
         function laggTillMeddelande(typ, text) {
             const div = document.createElement('div');
             div.className = 'msg ' + typ;
@@ -424,6 +549,7 @@ def analytiker():
             document.getElementById('meddelanden').appendChild(div);
             document.getElementById('meddelanden').scrollTop = 999999;
         }
+
         function laggTillLaddning() {
             const div = document.createElement('div');
             div.className = 'msg ai';
@@ -432,6 +558,7 @@ def analytiker():
             document.getElementById('meddelanden').scrollTop = 999999;
             return div;
         }
+
         document.getElementById('fraga').addEventListener('keydown', function(e) {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); skicka(); }
         });
@@ -443,28 +570,57 @@ def analytiker():
 @app.route("/analytiker/chatt", methods=["POST"])
 @inloggning_kravs
 def analytiker_chatt():
-    data       = request.get_json()
-    fraga      = data.get("fraga", "")
-    nyhetsbrev = data.get("nyhetsbrev", "")
+    data        = request.get_json()
+    fraga       = data.get("fraga", "")
+    nyhetsbrev  = data.get("nyhetsbrev", "")
+    dokument_id = data.get("dokument_id", "")
+    historik    = data.get("historik", [])
+
     marknadsdata = hamta_marknadsdata()
+
+    tidigare = hamta_tidigare_konversationer(antal=3)
+    minne = ""
+    if tidigare:
+        minne = "\n\nTidigare analyser:\n"
+        for k in tidigare:
+            minne += f"\n[{k['datum']} - {k['titel']}]\n"
+            for msg in k["meddelanden"][-4:]:
+                roll = "Du" if msg.get("roll") == "user" else "Analytiker"
+                minne += f"{roll}: {msg.get('text','')}\n"
+
+    dok_text = ""
+    if dokument_id:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT filnamn, innehall FROM dokument WHERE id=?", (dokument_id,))
+        rad = c.fetchone()
+        conn.close()
+        if rad:
+            dok_text = f"\n\nDokument ({rad[0]}):\n{rad[1][:3000]}"
+
     system_prompt = f"""Du är en erfaren teknisk analytiker som hjälper en privat investerare med beslut kring index-ETF:er och indexfonder.
 
-Din investeringsstrategi:
+Investeringsstrategi:
 - Swingtrading på index (OMX30, S&P500, Europa, Guld)
-- Teknisk analys baserad på RSI, MACD, SMA50/200, EMA20
+- Teknisk analys: RSI, MACD, SMA50/200, EMA20
 - Max 1-2% kapitalrisk per trade
 - Tidshorisont: veckor till månader
 
 Aktuell marknadsdata:
 {marknadsdata}
+{minne}
+{dok_text}
 
-Svara alltid på svenska. Var konkret och praktisk. Om du ser köp- eller säljlägen, säg det tydligt med motivering."""
+Svara på svenska. Var konkret. Referera till tidigare analyser när det är relevant."""
 
     meddelanden = []
+    for msg in historik[:-1]:
+        meddelanden.append({"role": "user" if msg["roll"] == "user" else "assistant", "content": msg["text"]})
+
+    sista = fraga
     if nyhetsbrev:
-        meddelanden.append({"role": "user", "content": f"Nyhetsbrev:\n\n{nyhetsbrev}\n\nFråga: {fraga}"})
-    else:
-        meddelanden.append({"role": "user", "content": fraga})
+        sista = f"Nyhetsbrev/analys:\n{nyhetsbrev}\n\nFråga: {fraga}"
+    meddelanden.append({"role": "user", "content": sista})
 
     try:
         svar = client.messages.create(
@@ -476,6 +632,171 @@ Svara alltid på svenska. Var konkret och praktisk. Om du ser köp- eller säljl
         return jsonify({"svar": svar.content[0].text})
     except Exception as e:
         return jsonify({"svar": f"Fel: {str(e)}"})
+
+
+@app.route("/analytiker/spara", methods=["POST"])
+@inloggning_kravs
+def analytiker_spara():
+    data     = request.get_json()
+    titel    = data.get("titel", "Analys")
+    historik = data.get("historik", [])
+    spara_konversation(titel, historik, hamta_marknadsdata())
+    return jsonify({"meddelande": f"Sparad: {titel}"})
+
+
+@app.route("/dokument/ladda-upp", methods=["POST"])
+@inloggning_kravs
+def ladda_upp_dokument():
+    if "fil" not in request.files:
+        return jsonify({"meddelande": "Ingen fil vald."})
+    fil = request.files["fil"]
+    if not fil.filename:
+        return jsonify({"meddelande": "Ingen fil vald."})
+
+    filnamn  = fil.filename
+    innehall = ""
+
+    if filnamn.lower().endswith(".pdf"):
+        try:
+            import base64
+            pdf_b64 = base64.standard_b64encode(fil.read()).decode("utf-8")
+            svar = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=4000,
+                messages=[{"role": "user", "content": [
+                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64}},
+                    {"type": "text", "text": "Extrahera och returnera all text från detta dokument."}
+                ]}]
+            )
+            innehall = svar.content[0].text
+        except Exception as e:
+            return jsonify({"meddelande": f"PDF-fel: {str(e)}"})
+    else:
+        innehall = fil.read().decode("utf-8", errors="ignore")
+
+    spara_dokument(filnamn, innehall)
+    return jsonify({"meddelande": f"Uppladdad: {filnamn}"})
+
+
+@app.route("/analyslogg")
+@inloggning_kravs
+def analyslogg():
+    konversationer = hamta_alla_konversationer()
+    html = """<!DOCTYPE html><html>
+    <head><title>Analyslogg</title><meta charset="utf-8">""" + BASE_STYLE + """
+    </head><body>""" + NAV_HTML + """
+        <h1>Analyslogg</h1>
+        <p style="color:#888; margin-bottom:20px; font-size:0.9em;">Sparade konversationer med AI-analytikern.</p>
+        {% if konversationer %}
+        <table class="tabell">
+            <thead><tr><th>Datum</th><th>Titel</th><th>Sparad</th><th></th></tr></thead>
+            <tbody>
+            {% for k in konversationer %}
+                <tr>
+                    <td>{{ k.datum }}</td>
+                    <td>{{ k.titel or 'Utan titel' }}</td>
+                    <td>{{ k.skapad }}</td>
+                    <td><a href="/analyslogg/{{ k.id }}">Visa</a></td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color:#888;">Inga sparade analyser ännu.</p>
+        {% endif %}
+    </body></html>"""
+    return render_template_string(html, konversationer=konversationer)
+
+
+@app.route("/analyslogg/<int:konv_id>")
+@inloggning_kravs
+def visa_analys(konv_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT datum, titel, meddelanden, marknadsdata, skapad FROM konversationer WHERE id=?", (konv_id,))
+    rad = c.fetchone()
+    conn.close()
+    if not rad:
+        return "Analys hittades inte", 404
+    meddelanden = json.loads(rad[2])
+    html = """<!DOCTYPE html><html>
+    <head><title>{{ titel }}</title><meta charset="utf-8">""" + BASE_STYLE + """
+    <style>
+        .msg { margin-bottom: 16px; max-width: 700px; }
+        .msg.user { text-align: right; }
+        .msg.user .bubbla { background: #0044cc; color: #fff; display: inline-block; padding: 10px 16px; border-radius: 12px 12px 2px 12px; max-width: 85%; text-align: left; }
+        .msg.ai .bubbla { background: #f0f0f0; color: #222; display: inline-block; padding: 10px 16px; border-radius: 12px 12px 12px 2px; max-width: 85%; }
+        .msg .avsandare { font-size: 0.78em; color: #999; margin-bottom: 4px; }
+        .marknadsdata { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 14px; margin-bottom: 20px; font-size: 0.84em; color: #555; white-space: pre-line; }
+    </style></head>
+    <body>""" + NAV_HTML + """
+        <h1>{{ titel }}</h1>
+        <p style="color:#888; margin-bottom:16px; font-size:0.88em;">{{ skapad }}</p>
+        {% if marknadsdata %}
+        <div class="marknadsdata"><strong>Marknadsdata:</strong><br>{{ marknadsdata }}</div>
+        {% endif %}
+        {% for msg in meddelanden %}
+            <div class="msg {{ 'user' if msg.roll == 'user' else 'ai' }}">
+                <div class="avsandare">{{ 'Du' if msg.roll == 'user' else 'AI-Analytiker' }}</div>
+                <div class="bubbla">{{ msg.text | replace('\n', '<br>') | safe }}</div>
+            </div>
+        {% endfor %}
+        <br><a href="/analyslogg">← Tillbaka</a>
+    </body></html>"""
+    return render_template_string(html, titel=rad[1], skapad=rad[4], marknadsdata=rad[3], meddelanden=meddelanden)
+
+
+@app.route("/dokument")
+@inloggning_kravs
+def dokument_sida():
+    dokument = hamta_alla_dokument()
+    html = """<!DOCTYPE html><html>
+    <head><title>Dokument</title><meta charset="utf-8">""" + BASE_STYLE + """
+    </head><body>""" + NAV_HTML + """
+        <h1>Dokument</h1>
+        <p style="color:#888; margin-bottom:20px; font-size:0.9em;">Uppladdade nyhetsbrev, analyser och rapporter.</p>
+        {% if dokument %}
+        <table class="tabell">
+            <thead><tr><th>Filnamn</th><th>Uppladdad</th><th></th></tr></thead>
+            <tbody>
+            {% for d in dokument %}
+                <tr>
+                    <td>{{ d.filnamn }}</td>
+                    <td>{{ d.uppladdad }}</td>
+                    <td><a href="/dokument/{{ d.id }}">Visa</a></td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color:#888;">Inga dokument uppladdade ännu.</p>
+        {% endif %}
+    </body></html>"""
+    return render_template_string(html, dokument=dokument)
+
+
+@app.route("/dokument/<int:dok_id>")
+@inloggning_kravs
+def visa_dokument(dok_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT filnamn, innehall, uppladdad FROM dokument WHERE id=?", (dok_id,))
+    rad = c.fetchone()
+    conn.close()
+    if not rad:
+        return "Dokument hittades inte", 404
+    html = """<!DOCTYPE html><html>
+    <head><title>{{ filnamn }}</title><meta charset="utf-8">""" + BASE_STYLE + """
+    <style>
+        .dok-innehall { background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 24px; white-space: pre-wrap; font-size: 0.9em; line-height: 1.6; max-width: 800px; }
+    </style></head>
+    <body>""" + NAV_HTML + """
+        <h1>{{ filnamn }}</h1>
+        <p style="color:#888; margin-bottom:16px; font-size:0.88em;">Uppladdad: {{ uppladdad }}</p>
+        <div class="dok-innehall">{{ innehall }}</div>
+        <br><a href="/dokument">← Tillbaka</a>
+    </body></html>"""
+    return render_template_string(html, filnamn=rad[0], innehall=rad[1], uppladdad=rad[2])
 
 
 @app.route("/riskmotor", methods=["GET", "POST"])
@@ -525,7 +846,7 @@ def riskmotor():
     </style></head>
     <body>""" + NAV_HTML + """
         <h1>Riskmotor</h1>
-        <p style="color:#888; margin-bottom:18px; font-size:0.9em;">Beraknar position size baserat pa max risk per trade.</p>
+        <p style="color:#888; margin-bottom:18px; font-size:0.9em;">Beräknar position size baserat på max risk per trade.</p>
         {% if fel %}<p class="fel">{{ fel }}</p>{% endif %}
         <form method="POST">
             <div class="form-grid">
@@ -534,7 +855,7 @@ def riskmotor():
                 <div class="form-group"><label>Entry-pris</label><input type="text" name="entry" placeholder="2200" value="{{ request.form.get('entry', '') }}"></div>
                 <div class="form-group"><label>Stop-loss</label><input type="text" name="stop" placeholder="2150" value="{{ request.form.get('stop', '') }}"></div>
             </div>
-            <button class="submit-btn" type="submit">Berakna</button>
+            <button class="submit-btn" type="submit">Beräkna</button>
         </form>
         {% if resultat %}
         <br>
