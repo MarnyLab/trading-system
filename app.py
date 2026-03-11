@@ -23,6 +23,7 @@ except ImportError:
     GMAIL_AVAILABLE = False
 
 load_dotenv()
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
 app = Flask(__name__)
 app.secret_key = "trading-system-secret-2026"
@@ -934,7 +935,7 @@ def gmail_koppla():
     if not GMAIL_AVAILABLE:
         return "Gmail-bibliotek saknas. Kör: pip install google-auth google-auth-oauthlib google-api-python-client", 500
     flow = Flow.from_client_config(GMAIL_CLIENT_CONFIG, scopes=GMAIL_SCOPES, redirect_uri=GMAIL_REDIRECT_URI)
-    auth_url, state = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent")
+    auth_url, state = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent", code_challenge_method=None)
     session["gmail_state"] = state
     return redirect(auth_url)
 
@@ -943,7 +944,9 @@ def gmail_callback():
     if not GMAIL_AVAILABLE:
         return "Gmail-bibliotek saknas.", 500
     flow = Flow.from_client_config(GMAIL_CLIENT_CONFIG, scopes=GMAIL_SCOPES, redirect_uri=GMAIL_REDIRECT_URI, state=session.get("gmail_state"))
-    flow.fetch_token(authorization_response=request.url)
+    import os as _os
+    _os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+    flow.fetch_token(authorization_response=request.url.replace("http:", "https:"))
     spara_gmail_token(flow.credentials)
     return redirect(url_for("gmail_sida"))
 
