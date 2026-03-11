@@ -9,8 +9,18 @@ import anthropic
 import os
 import sqlite3
 import json
+import base64
+import email as email_lib
 from dotenv import load_dotenv
 from functools import wraps
+try:
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import Flow
+    from googleapiclient.discovery import build
+    from google.auth.transport.requests import Request
+    GMAIL_AVAILABLE = True
+except ImportError:
+    GMAIL_AVAILABLE = False
 
 load_dotenv()
 
@@ -42,10 +52,54 @@ def init_db():
             uppladdad TEXT NOT NULL
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS gmail_token (
+            id INTEGER PRIMARY KEY,
+            token_json TEXT NOT NULL,
+            uppdaterad TEXT NOT NULL
+        )
+    """)
     conn.commit()
     conn.close()
 
 init_db()
+
+# Gmail konfiguration
+GMAIL_CLIENT_CONFIG = {
+    "web": {
+        "client_id": os.getenv("GMAIL_CLIENT_ID", ""),
+        "project_id": "trading-system-489914",
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        "client_secret": os.getenv("GMAIL_CLIENT_SECRET", ""),
+        "redirect_uris": ["https://trading-system-r7ii.onrender.com/gmail/callback"]
+    }
+}
+GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+GMAIL_REDIRECT_URI = "https://trading-system-r7ii.onrender.com/gmail/callback"
+
+def hamta_gmail_credentials():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT token_json FROM gmail_token WHERE id=1")
+    rad = c.fetchone()
+    conn.close()
+    if not rad or not GMAIL_AVAILABLE:
+        return None
+    creds = Credentials.from_authorized_user_info(json.loads(rad[0]), GMAIL_SCOPES)
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        spara_gmail_token(creds)
+    return creds
+
+def spara_gmail_token(creds):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO gmail_token (id, token_json, uppdaterad) VALUES (1, ?, ?)",
+              (creds.to_json(), datetime.now().strftime("%Y-%m-%d %H:%M")))
+    conn.commit()
+    conn.close()
 
 def spara_konversation(titel, meddelanden, marknadsdata):
     conn = sqlite3.connect(DB_PATH)
@@ -237,6 +291,7 @@ NAV_HTML = """
     <a href="/analyslogg" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Analyslogg</a>
     <a href="/dokument" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Dokument</a>
     <a href="/riskmotor" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Riskmotor</a>
+    <a href="/gmail" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Gmail</a>
     <a href="/logout" style="color:#999; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em; margin-left:auto;">Logga ut</a>
 </nav>
 """
@@ -871,6 +926,108 @@ def riskmotor():
         {% endif %}
     </body></html>"""
     return render_template_string(html, resultat=resultat, fel=fel, request=request)
+
+
+@app.route("/gmail/koppla")
+@inloggning_kravs
+def gmail_koppla():
+    if not GMAIL_AVAILABLE:
+        return "Gmail-bibliotek saknas. Kör: pip install google-auth google-auth-oauthlib google-api-python-client", 500
+    flow = Flow.from_client_config(GMAIL_CLIENT_CONFIG, scopes=GMAIL_SCOPES, redirect_uri=GMAIL_REDIRECT_URI)
+    auth_url, state = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent")
+    session["gmail_state"] = state
+    return redirect(auth_url)
+
+@app.route("/gmail/callback")
+def gmail_callback():
+    if not GMAIL_AVAILABLE:
+        return "Gmail-bibliotek saknas.", 500
+    flow = Flow.from_client_config(GMAIL_CLIENT_CONFIG, scopes=GMAIL_SCOPES, redirect_uri=GMAIL_REDIRECT_URI, state=session.get("gmail_state"))
+    flow.fetch_token(authorization_response=request.url)
+    spara_gmail_token(flow.credentials)
+    return redirect(url_for("gmail_sida"))
+
+@app.route("/gmail")
+@inloggning_kravs
+def gmail_sida():
+    creds = hamta_gmail_credentials()
+    kopplad = creds is not None and creds.valid
+    mejl_lista = []
+    if kopplad:
+        try:
+            service = build("gmail", "v1", credentials=creds)
+            results = service.users().messages().list(userId="me", maxResults=20, q="is:unread").execute()
+            messages = results.get("messages", [])
+            for msg in messages:
+                m = service.users().messages().get(userId="me", id=msg["id"], format="metadata",
+                    metadataHeaders=["Subject", "From", "Date"]).execute()
+                headers = {h["name"]: h["value"] for h in m["payload"]["headers"]}
+                mejl_lista.append({
+                    "id": msg["id"],
+                    "subject": headers.get("Subject", "(ingen rubrik)"),
+                    "from": headers.get("From", ""),
+                    "date": headers.get("Date", "")
+                })
+        except Exception as e:
+            kopplad = False
+
+    html = """<!DOCTYPE html><html>
+    <head><title>Gmail</title><meta charset="utf-8">""" + BASE_STYLE + """
+    </head><body>""" + NAV_HTML + """
+        <h1>Gmail-integration</h1>
+        {% if kopplad %}
+        <p style="color:#007700; margin-bottom:20px;">✅ Kopplad till gena.input@gmail.com</p>
+        <h2>Olästa mejl ({{ mejl_lista|length }})</h2>
+        {% if mejl_lista %}
+        <table class="tabell">
+            <thead><tr><th>Ämne</th><th>Från</th><th>Datum</th><th></th></tr></thead>
+            <tbody>
+            {% for m in mejl_lista %}
+                <tr>
+                    <td>{{ m.subject[:60] }}</td>
+                    <td>{{ m["from"][:40] }}</td>
+                    <td>{{ m.date[:16] }}</td>
+                    <td><a href="/gmail/importera/{{ m.id }}">Importera</a></td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color:#888;">Inga olästa mejl.</p>
+        {% endif %}
+        {% else %}
+        <p style="color:#888; margin-bottom:20px;">Inte kopplad ännu.</p>
+        <a href="/gmail/koppla" style="padding:10px 22px; background:#0044cc; color:#fff; border-radius:6px; text-decoration:none;">Koppla Gmail</a>
+        {% endif %}
+    </body></html>"""
+    return render_template_string(html, kopplad=kopplad, mejl_lista=mejl_lista)
+
+@app.route("/gmail/importera/<msg_id>")
+@inloggning_kravs
+def gmail_importera(msg_id):
+    creds = hamta_gmail_credentials()
+    if not creds:
+        return redirect(url_for("gmail_sida"))
+    try:
+        service = build("gmail", "v1", credentials=creds)
+        m = service.users().messages().get(userId="me", id=msg_id, format="full").execute()
+        headers = {h["name"]: h["value"] for h in m["payload"]["headers"]}
+        subject = headers.get("Subject", "Gmail-mejl")
+        body = ""
+        payload = m["payload"]
+        if "parts" in payload:
+            for part in payload["parts"]:
+                if part["mimeType"] == "text/plain" and "data" in part.get("body", {}):
+                    body = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="ignore")
+                    break
+        elif "body" in payload and "data" in payload["body"]:
+            body = base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8", errors="ignore")
+        if not body:
+            body = m.get("snippet", "")
+        spara_dokument(subject[:100], body)
+        return redirect(url_for("analytiker"))
+    except Exception as e:
+        return f"Fel vid import: {str(e)}", 500
 
 
 if __name__ == "__main__":
