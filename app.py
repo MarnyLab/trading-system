@@ -60,6 +60,14 @@ def init_db():
             uppdaterad TEXT NOT NULL
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS dagliga_analyser (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            datum TEXT NOT NULL,
+            analys TEXT NOT NULL,
+            skapad TEXT NOT NULL
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -293,6 +301,7 @@ NAV_HTML = """
     <a href="/dokument" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Dokument</a>
     <a href="/riskmotor" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Riskmotor</a>
     <a href="/gmail" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Gmail</a>
+    <a href="/daglig-analys" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Daglig Analys</a>
     <a href="/logout" style="color:#999; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em; margin-left:auto;">Logga ut</a>
 </nav>
 """
@@ -561,6 +570,7 @@ def analytiker():
                 laddning.remove();
                 chattHistorik.push({roll: 'assistant', text: data.svar});
                 laggTillMeddelande('ai', data.svar);
+                autoSpara();
             } catch(e) {
                 laddning.remove();
                 laggTillMeddelande('ai', 'Något gick fel.');
@@ -618,6 +628,23 @@ def analytiker():
         document.getElementById('fraga').addEventListener('keydown', function(e) {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); skicka(); }
         });
+
+        // Auto-spara till sessionStorage efter varje meddelande
+        function autoSpara() {
+            sessionStorage.setItem('chattHistorik', JSON.stringify(chattHistorik));
+        }
+
+        // Återställ konversation från sessionStorage vid sidladdning
+        function aterstellKonversation() {
+            const sparad = sessionStorage.getItem('chattHistorik');
+            if (sparad) {
+                chattHistorik = JSON.parse(sparad);
+                chattHistorik.forEach(msg => {
+                    laggTillMeddelande(msg.roll === 'user' ? 'user' : 'ai', msg.text);
+                });
+            }
+        }
+        aterstellKonversation();
         </script>
     </body></html>"""
     return render_template_string(html)
@@ -1044,6 +1071,132 @@ def gmail_importera(msg_id):
         return redirect(url_for("analytiker"))
     except Exception as e:
         return f"Fel vid import: {str(e)}", 500
+
+
+@app.route("/cron/daglig-analys")
+def cron_daglig_analys():
+    # Säkerhetskontroll - bara Render kan anropa denna
+    auth = request.headers.get("Authorization", "")
+    cron_secret = os.getenv("CRON_SECRET", "")
+    if cron_secret and auth != f"Bearer {cron_secret}":
+        return "Unauthorized", 401
+
+    try:
+        # 1. Hämta nya Gmail-mejl
+        creds = hamta_gmail_credentials()
+        nya_dokument = []
+        if creds and creds.valid and GMAIL_AVAILABLE:
+            service = build("gmail", "v1", credentials=creds)
+            results = service.users().messages().list(userId="me", maxResults=10, q="is:unread").execute()
+            messages = results.get("messages", [])
+            for msg in messages:
+                m = service.users().messages().get(userId="me", id=msg["id"], format="full").execute()
+                headers = {h["name"]: h["value"] for h in m["payload"]["headers"]}
+                subject = headers.get("Subject", "Gmail-mejl")
+                body = ""
+                payload = m["payload"]
+                if "parts" in payload:
+                    for part in payload["parts"]:
+                        if part["mimeType"] == "text/plain" and "data" in part.get("body", {}):
+                            body = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="ignore")
+                            break
+                elif "body" in payload and "data" in payload["body"]:
+                    body = base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8", errors="ignore")
+                if body:
+                    spara_dokument(subject[:100], body)
+                    nya_dokument.append(subject[:60])
+                # Markera som läst
+                service.users().messages().modify(userId="me", id=msg["id"], body={"removeLabelIds": ["UNREAD"]}).execute()
+
+        # 2. Hämta marknadsdata
+        marknadsdata = hamta_marknadsdata()
+
+        # 3. Hämta de senaste dokumenten för kontext
+        alla_dok = hamta_alla_dokument()
+        dok_kontext = ""
+        if alla_dok:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            for d in alla_dok[:5]:
+                c.execute("SELECT innehall FROM dokument WHERE id=?", (d["id"],))
+                rad = c.fetchone()
+                if rad:
+                    dok_kontext += f"
+
+--- {d['filnamn']} ({d['uppladdad']}) ---
+{rad[0][:1500]}"
+            conn.close()
+
+        # 4. Generera daglig analys med Claude
+        prompt = f"""Generera en daglig marknadsanalys för {datetime.now().strftime('%Y-%m-%d')}.
+
+Marknadsdata:
+{marknadsdata}
+
+Nyhetsbrev och analyser:
+{dok_kontext if dok_kontext else 'Inga nya dokument idag.'}
+
+Ny mejl idag: {', '.join(nya_dokument) if nya_dokument else 'Inga'}
+
+Ge en strukturerad analys med:
+1. Sammanfattning av marknadsläget
+2. Vad nyhetsbreven/analyserna säger
+3. Konkreta observationer per index
+4. Eventuella köp/säljsignaler att bevaka"""
+
+        svar = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1500,
+            system="Du är en erfaren teknisk analytiker. Svara på svenska. Var konkret och strukturerad.",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        analys_text = svar.content[0].text
+
+        # 5. Spara analysen
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("INSERT INTO dagliga_analyser (datum, analys, skapad) VALUES (?, ?, ?)",
+                  (datetime.now().strftime("%Y-%m-%d"), analys_text, datetime.now().strftime("%Y-%m-%d %H:%M")))
+        conn.commit()
+        conn.close()
+
+        return jsonify({"status": "ok", "datum": datetime.now().strftime("%Y-%m-%d"), "nya_mejl": len(nya_dokument)})
+    except Exception as e:
+        return jsonify({"status": "fel", "meddelande": str(e)}), 500
+
+
+@app.route("/daglig-analys")
+@inloggning_kravs
+def daglig_analys_sida():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, datum, analys, skapad FROM dagliga_analyser ORDER BY id DESC LIMIT 10")
+    rader = c.fetchall()
+    conn.close()
+    analyser = [{"id": r[0], "datum": r[1], "analys": r[2], "skapad": r[3]} for r in rader]
+
+    html = """<!DOCTYPE html><html>
+    <head><title>Daglig Analys</title><meta charset="utf-8">""" + BASE_STYLE + """
+    <style>
+        .analys-kort { background: #fff; border-radius: 10px; padding: 24px; border: 1px solid #ddd; margin-bottom: 20px; max-width: 800px; }
+        .analys-datum { font-size: 0.85em; color: #888; margin-bottom: 14px; }
+        .analys-text { white-space: pre-wrap; line-height: 1.7; font-size: 0.92em; }
+    </style>
+    </head><body>""" + NAV_HTML + """
+        <h1>Daglig Analys</h1>
+        <p style="color:#888; margin-bottom:20px; font-size:0.9em;">Automatisk analys genererad varje morgon baserat på marknadsdata och nyhetsbrev.</p>
+        {% if analyser %}
+            {% for a in analyser %}
+            <div class="analys-kort">
+                <div class="analys-datum">{{ a.datum }} · Genererad {{ a.skapad }}</div>
+                <div class="analys-text">{{ a.analys }}</div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p style="color:#888;">Ingen daglig analys ännu. Aktivera Cron Job på Render för automatisk körning.</p>
+        {% endif %}
+    </body></html>"""
+    return render_template_string(html, analyser=analyser)
 
 
 if __name__ == "__main__":
