@@ -1075,12 +1075,15 @@ def gmail_importera(msg_id):
 
 @app.route("/cron/daglig-analys")
 def cron_daglig_analys():
-    # Säkerhetskontroll - bara Render kan anropa denna
-    auth = request.headers.get("Authorization", "")
-    cron_secret = os.getenv("CRON_SECRET", "")
-    if cron_secret and auth != f"Bearer {cron_secret}":
-        return "Unauthorized", 401
+    import threading
+    t = threading.Thread(target=kör_daglig_analys)
+    t.daemon = True
+    t.start()
+    return jsonify({"status": "started", "meddelande": "Daglig analys körs i bakgrunden."})
 
+
+def kör_daglig_analys():
+    """Körs i bakgrundstråd så att cron-anropet inte timear ut."""
     try:
         # 1. Hämta nya Gmail-mejl
         creds = hamta_gmail_credentials()
@@ -1105,13 +1108,12 @@ def cron_daglig_analys():
                 if body:
                     spara_dokument(subject[:100], body)
                     nya_dokument.append(subject[:60])
-                # Markera som läst
                 service.users().messages().modify(userId="me", id=msg["id"], body={"removeLabelIds": ["UNREAD"]}).execute()
 
         # 2. Hämta marknadsdata
         marknadsdata = hamta_marknadsdata()
 
-        # 3. Hämta de senaste dokumenten för kontext
+        # 3. Hämta senaste dokument
         alla_dok = hamta_alla_dokument()
         dok_kontext = ""
         if alla_dok:
@@ -1121,25 +1123,11 @@ def cron_daglig_analys():
                 c.execute("SELECT innehall FROM dokument WHERE id=?", (d["id"],))
                 rad = c.fetchone()
                 if rad:
-                    dok_kontext += "\n\n--- " + d['filnamn'] + " (" + d['uppladdad'] + ") ---\n" + rad[0][:1500]
+                    dok_kontext += "\n\n--- " + d["filnamn"] + " (" + d["uppladdad"] + ") ---\n" + rad[0][:1500]
             conn.close()
 
-        # 4. Generera daglig analys med Claude
-        prompt = f"""Generera en daglig marknadsanalys för {datetime.now().strftime('%Y-%m-%d')}.
-
-Marknadsdata:
-{marknadsdata}
-
-Nyhetsbrev och analyser:
-{dok_kontext if dok_kontext else 'Inga nya dokument idag.'}
-
-Ny mejl idag: {', '.join(nya_dokument) if nya_dokument else 'Inga'}
-
-Ge en strukturerad analys med:
-1. Sammanfattning av marknadsläget
-2. Vad nyhetsbreven/analyserna säger
-3. Konkreta observationer per index
-4. Eventuella köp/säljsignaler att bevaka"""
+        # 4. Generera analys
+        prompt = "Generera en daglig marknadsanalys för " + datetime.now().strftime("%Y-%m-%d") + ".\n\nMarknadsdata:\n" + marknadsdata + "\n\nNyhetsbrev och analyser:\n" + (dok_kontext if dok_kontext else "Inga nya dokument idag.") + "\n\nNya mejl idag: " + (", ".join(nya_dokument) if nya_dokument else "Inga") + "\n\nGe en strukturerad analys med:\n1. Sammanfattning av marknadsläget\n2. Vad nyhetsbreven säger\n3. Observationer per index\n4. Eventuella köp/säljsignaler"
 
         svar = client.messages.create(
             model="claude-sonnet-4-6",
@@ -1157,9 +1145,8 @@ Ge en strukturerad analys med:
         conn.commit()
         conn.close()
 
-        return jsonify({"status": "ok", "datum": datetime.now().strftime("%Y-%m-%d"), "nya_mejl": len(nya_dokument)})
     except Exception as e:
-        return jsonify({"status": "fel", "meddelande": str(e)}), 500
+        print(f"Cron fel: {str(e)}")
 
 
 @app.route("/daglig-analys")
