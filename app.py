@@ -935,7 +935,7 @@ def gmail_koppla():
     if not GMAIL_AVAILABLE:
         return "Gmail-bibliotek saknas. Kör: pip install google-auth google-auth-oauthlib google-api-python-client", 500
     flow = Flow.from_client_config(GMAIL_CLIENT_CONFIG, scopes=GMAIL_SCOPES, redirect_uri=GMAIL_REDIRECT_URI)
-    auth_url, state = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent", code_challenge_method=None)
+    auth_url, state = flow.authorization_url(access_type="offline", prompt="consent")
     session["gmail_state"] = state
     return redirect(auth_url)
 
