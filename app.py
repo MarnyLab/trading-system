@@ -1121,10 +1121,7 @@ def cron_daglig_analys():
                 c.execute("SELECT innehall FROM dokument WHERE id=?", (d["id"],))
                 rad = c.fetchone()
                 if rad:
-                    dok_kontext += f"
-
---- {d['filnamn']} ({d['uppladdad']}) ---
-{rad[0][:1500]}"
+                    dok_kontext += "\n\n--- " + d['filnamn'] + " (" + d['uppladdad'] + ") ---\n" + rad[0][:1500]
             conn.close()
 
         # 4. Generera daglig analys med Claude
