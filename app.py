@@ -934,8 +934,19 @@ def riskmotor():
 def gmail_koppla():
     if not GMAIL_AVAILABLE:
         return "Gmail-bibliotek saknas. Kör: pip install google-auth google-auth-oauthlib google-api-python-client", 500
+    import secrets, hashlib
+    code_verifier = secrets.token_urlsafe(64)
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode()).digest()
+    ).rstrip(b"=").decode()
+    session["gmail_code_verifier"] = code_verifier
     flow = Flow.from_client_config(GMAIL_CLIENT_CONFIG, scopes=GMAIL_SCOPES, redirect_uri=GMAIL_REDIRECT_URI)
-    auth_url, state = flow.authorization_url(access_type="offline", prompt="consent")
+    auth_url, state = flow.authorization_url(
+        access_type="offline",
+        prompt="consent",
+        code_challenge=code_challenge,
+        code_challenge_method="S256"
+    )
     session["gmail_state"] = state
     return redirect(auth_url)
 
@@ -943,10 +954,12 @@ def gmail_koppla():
 def gmail_callback():
     if not GMAIL_AVAILABLE:
         return "Gmail-bibliotek saknas.", 500
+    code_verifier = session.get("gmail_code_verifier", "")
     flow = Flow.from_client_config(GMAIL_CLIENT_CONFIG, scopes=GMAIL_SCOPES, redirect_uri=GMAIL_REDIRECT_URI, state=session.get("gmail_state"))
-    import os as _os
-    _os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
-    flow.fetch_token(authorization_response=request.url.replace("http:", "https:"))
+    flow.fetch_token(
+        authorization_response=request.url.replace("http:", "https:"),
+        code_verifier=code_verifier
+    )
     spara_gmail_token(flow.credentials)
     return redirect(url_for("gmail_sida"))
 
