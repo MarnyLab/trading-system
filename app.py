@@ -68,6 +68,21 @@ def init_db():
             skapad TEXT NOT NULL
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS tankar (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            datum TEXT NOT NULL,
+            index_namn TEXT NOT NULL,
+            kurs_start REAL NOT NULL,
+            riktning TEXT NOT NULL,
+            mal_niva REAL,
+            mal_procent REAL,
+            period TEXT NOT NULL,
+            kommentar TEXT,
+            avslutad INTEGER DEFAULT 0,
+            skapad TEXT NOT NULL
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -302,6 +317,7 @@ NAV_HTML = """
     <a href="/riskmotor" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Riskmotor</a>
     <a href="/gmail" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Gmail</a>
     <a href="/daglig-analys" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Daglig Analys</a>
+    <a href="/tracker" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Tracker</a>
     <a href="/logout" style="color:#999; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em; margin-left:auto;">Logga ut</a>
 </nav>
 """
@@ -1182,6 +1198,282 @@ def daglig_analys_sida():
     </body></html>"""
     return render_template_string(html, analyser=analyser)
 
+
+
+# ── Tracker routes ─────────────────────────────────────────
+
+@app.route("/tracker")
+@inloggning_kravs
+def tracker_sida():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""SELECT id, datum, index_namn, kurs_start, riktning, mal_niva, mal_procent, 
+                 period, kommentar, avslutad FROM tankar ORDER BY id DESC""")
+    rader = c.fetchall()
+    conn.close()
+    trackers = [{
+        "id": r[0], "datum": r[1], "index_namn": r[2], "kurs_start": r[3],
+        "riktning": r[4], "mal_niva": r[5], "mal_procent": r[6],
+        "period": r[7], "kommentar": r[8], "avslutad": r[9]
+    } for r in rader]
+
+    html = """<!DOCTYPE html><html>
+    <head><title>Tracker</title><meta charset="utf-8">""" + BASE_STYLE + """
+    <style>
+        .ny-tracker { background:#fff; border-radius:10px; padding:24px; border:1px solid #ddd; max-width:680px; margin-bottom:30px; }
+        .ny-tracker h2 { font-size:1em; color:#444; margin-bottom:18px; }
+        .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px; }
+        .form-full { grid-column: 1 / -1; }
+        .form-group label { display:block; color:#888; font-size:0.82em; margin-bottom:4px; font-weight:bold; }
+        .form-group select, .form-group input, .form-group textarea { width:100%; padding:9px 12px; border:1px solid #ccc; border-radius:6px; font-size:0.95em; font-family:inherit; }
+        .form-group textarea { min-height:70px; resize:vertical; }
+        .submit-btn { padding:10px 28px; background:#0044cc; color:#fff; border:none; border-radius:6px; font-size:1em; font-weight:bold; cursor:pointer; }
+        .tracker-lista { max-width:900px; }
+        .tracker-kort { background:#fff; border-radius:10px; padding:20px; border:1px solid #ddd; margin-bottom:16px; }
+        .tracker-kort.avslutad { opacity:0.6; }
+        .tracker-header { display:flex; gap:12px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
+        .badge { padding:3px 10px; border-radius:20px; font-size:0.8em; font-weight:bold; }
+        .badge-upp { background:#e6f4e6; color:#007700; }
+        .badge-ned { background:#fce8e8; color:#cc0000; }
+        .badge-aktiv { background:#e8f0fe; color:#0044cc; }
+        .badge-avslutad { background:#f0f0f0; color:#888; }
+        .tracker-info { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:10px; margin-bottom:12px; }
+        .info-cell { font-size:0.85em; }
+        .info-cell .etikett { color:#999; font-size:0.8em; }
+        .info-cell .varde { font-weight:bold; color:#111; }
+        .tracker-kommentar { font-size:0.88em; color:#555; font-style:italic; margin-bottom:12px; border-left:3px solid #ddd; padding-left:10px; }
+        .milstolpar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+        .milstolpe { font-size:0.8em; padding:4px 10px; border-radius:4px; background:#f8f8f8; border:1px solid #ddd; color:#555; }
+        .milstolpe.passerad { background:#fff8e6; border-color:#ffcc44; color:#886600; }
+        .ai-kommentar { background:#f8f8ff; border-radius:6px; padding:12px; font-size:0.87em; color:#333; line-height:1.6; margin-top:10px; white-space:pre-wrap; }
+        .btn-rad { display:flex; gap:8px; margin-top:12px; }
+        .btn-liten { padding:5px 14px; border:none; border-radius:5px; font-size:0.85em; cursor:pointer; }
+        .btn-analys { background:#0044cc; color:#fff; }
+        .btn-avsluta { background:#888; color:#fff; }
+    </style></head>
+    <body>""" + NAV_HTML + """
+        <h1>Tracker</h1>
+        <p style="color:#888; margin-bottom:20px; font-size:0.9em;">Logga en känsla eller analys och följ upp om du hade rätt.</p>
+
+        <div class="ny-tracker">
+            <h2>+ Ny Tracker</h2>
+            <form method="POST" action="/tracker/ny">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>Index</label>
+                        <select name="index_namn">
+                            <option>OMX30</option>
+                            <option>S&P500</option>
+                            <option>Europa</option>
+                            <option>Guld</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Riktning</label>
+                        <select name="riktning">
+                            <option value="Upp">↑ Upp</option>
+                            <option value="Ned">↓ Ned</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Målnivå (kurs)</label>
+                        <input type="number" step="0.01" name="mal_niva" placeholder="t.ex. 2500">
+                    </div>
+                    <div class="form-group">
+                        <label>Alt. mål i % (t.ex. 5 för +5%)</label>
+                        <input type="number" step="0.1" name="mal_procent" placeholder="t.ex. 5">
+                    </div>
+                    <div class="form-group">
+                        <label>Tidsperiod</label>
+                        <select name="period">
+                            <option>1 vecka</option>
+                            <option>2 veckor</option>
+                            <option selected>1 månad</option>
+                            <option>3 månader</option>
+                            <option>6 månader</option>
+                        </select>
+                    </div>
+                    <div class="form-group form-full">
+                        <label>Din analys / känsla</label>
+                        <textarea name="kommentar" placeholder="Varför tror du detta? Vad ser du i datan?"></textarea>
+                    </div>
+                </div>
+                <button class="submit-btn" type="submit">Starta tracker</button>
+            </form>
+        </div>
+
+        <div class="tracker-lista">
+        {% for t in trackers %}
+            <div class="tracker-kort {{ 'avslutad' if t.avslutad else '' }}">
+                <div class="tracker-header">
+                    <strong style="font-size:1.1em;">{{ t.index_namn }}</strong>
+                    <span class="badge {{ 'badge-upp' if t.riktning == 'Upp' else 'badge-ned' }}">
+                        {{ '↑' if t.riktning == 'Upp' else '↓' }} {{ t.riktning }}
+                    </span>
+                    <span class="badge {{ 'badge-avslutad' if t.avslutad else 'badge-aktiv' }}">
+                        {{ 'Avslutad' if t.avslutad else 'Aktiv' }}
+                    </span>
+                    <span style="color:#999; font-size:0.85em; margin-left:auto;">{{ t.datum }}</span>
+                </div>
+                <div class="tracker-info">
+                    <div class="info-cell"><div class="etikett">Startkurs</div><div class="varde">{{ "%.2f"|format(t.kurs_start) }}</div></div>
+                    {% if t.mal_niva %}<div class="info-cell"><div class="etikett">Målkurs</div><div class="varde">{{ "%.2f"|format(t.mal_niva) }}</div></div>{% endif %}
+                    {% if t.mal_procent %}<div class="info-cell"><div class="etikett">Mål %</div><div class="varde">{{ "%+.1f"|format(t.mal_procent) }}%</div></div>{% endif %}
+                    <div class="info-cell"><div class="etikett">Period</div><div class="varde">{{ t.period }}</div></div>
+                </div>
+                {% if t.kommentar %}
+                <div class="tracker-kommentar">{{ t.kommentar }}</div>
+                {% endif %}
+                {% if not t.avslutad %}
+                <div class="btn-rad">
+                    <button class="btn-liten btn-analys" onclick="analyseraTracker({{ t.id }}, this)">AI-analys nu</button>
+                    <button class="btn-liten btn-avsluta" onclick="avslutaTracker({{ t.id }})">Avsluta</button>
+                </div>
+                {% endif %}
+                <div id="ai-{{ t.id }}" class="ai-kommentar" style="display:none;"></div>
+            </div>
+        {% endfor %}
+        {% if not trackers %}
+        <p style="color:#888;">Inga trackers ännu. Starta din första ovan!</p>
+        {% endif %}
+        </div>
+
+        <script>
+        async function analyseraTracker(id, btn) {
+            btn.textContent = 'Analyserar...';
+            btn.disabled = true;
+            const svar = await fetch('/tracker/' + id + '/analysera', {method: 'POST'});
+            const data = await svar.json();
+            document.getElementById('ai-' + id).style.display = 'block';
+            document.getElementById('ai-' + id).textContent = data.analys;
+            btn.textContent = 'Uppdatera analys';
+            btn.disabled = false;
+        }
+        async function avslutaTracker(id) {
+            if (!confirm('Avsluta trackern?')) return;
+            await fetch('/tracker/' + id + '/avsluta', {method: 'POST'});
+            location.reload();
+        }
+        </script>
+    </body></html>"""
+    return render_template_string(html, trackers=trackers)
+
+
+@app.route("/tracker/ny", methods=["POST"])
+@inloggning_kravs
+def tracker_ny():
+    index_namn  = request.form.get("index_namn", "OMX30")
+    riktning    = request.form.get("riktning", "Upp")
+    mal_niva    = request.form.get("mal_niva", "") or None
+    mal_procent = request.form.get("mal_procent", "") or None
+    period      = request.form.get("period", "1 månad")
+    kommentar   = request.form.get("kommentar", "")
+
+    ticker = TICKERS.get(index_namn, "^OMX")
+    try:
+        df = hamta_data(ticker, yf_period="5d", yf_interval="1d")
+        kurs_start = float(df["Close"].iloc[-1])
+    except:
+        kurs_start = 0.0
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""INSERT INTO tankar 
+        (datum, index_namn, kurs_start, riktning, mal_niva, mal_procent, period, kommentar, avslutad, skapad)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+        (datetime.now().strftime("%Y-%m-%d"), index_namn, kurs_start,
+         riktning, float(mal_niva) if mal_niva else None,
+         float(mal_procent) if mal_procent else None,
+         period, kommentar, datetime.now().strftime("%Y-%m-%d %H:%M")))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("tracker_sida"))
+
+
+@app.route("/tracker/<int:tracker_id>/analysera", methods=["POST"])
+@inloggning_kravs
+def tracker_analysera(tracker_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT datum, index_namn, kurs_start, riktning, mal_niva, mal_procent, period, kommentar FROM tankar WHERE id=?", (tracker_id,))
+    rad = c.fetchone()
+    conn.close()
+    if not rad:
+        return jsonify({"analys": "Tracker hittades inte."})
+
+    datum, index_namn, kurs_start, riktning, mal_niva, mal_procent, period, kommentar = rad
+
+    ticker = TICKERS.get(index_namn, "^OMX")
+    try:
+        df = hamta_data(ticker, yf_period="6mo", yf_interval="1d")
+        kurs_nu = float(df["Close"].iloc[-1])
+        s = sammanfatta(index_namn, df)
+        forandring = (kurs_nu - kurs_start) / kurs_start * 100
+
+        # Hämta kursdata från startdatum
+        start_dt = datetime.strptime(datum, "%Y-%m-%d")
+        df_period = df[df.index >= start_dt] if start_dt in df.index or len(df) > 0 else df
+
+        marknadsinfo = f"""
+Index: {index_namn}
+Startkurs ({datum}): {kurs_start:.2f}
+Aktuell kurs: {kurs_nu:.2f}
+Förändring sedan start: {forandring:+.2f}%
+RSI nu: {s['rsi']} ({s['rsi_text']})
+Trend: {s['trend']}
+MACD: {s['macd_signal']}
+SMA50: {s['sma50']} | SMA200: {s['sma200']}
+"""
+    except Exception as e:
+        marknadsinfo = f"Kunde inte hämta marknadsdata: {str(e)}"
+        forandring = 0
+
+    mal_text = ""
+    if mal_niva:
+        mal_text = f"Målkurs: {mal_niva:.2f}"
+    if mal_procent:
+        mal_text += f" (mål: {mal_procent:+.1f}%)"
+
+    prompt = f"""En investerare startade en tracker den {datum} med följande antagande:
+
+Index: {index_namn}
+Riktning: {riktning}
+{mal_text}
+Tidsperiod: {period}
+Investerarens analys: {kommentar}
+
+Aktuell utveckling:
+{marknadsinfo}
+
+Analysera:
+1. Hur har utvecklingen gått mot antagandet hittills?
+2. Vad stödjer eller motarbetar antagandet tekniskt?
+3. Om riktningen avvikit från antagandet - när och varför skedde troligen avvikelsen?
+4. Din bedömning av om antagandet fortfarande håller."""
+
+    try:
+        svar = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=800,
+            system="Du är en erfaren teknisk analytiker. Svara på svenska. Var konkret och hjälp investeraren förstå om deras antagande håller.",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        analys = svar.content[0].text
+    except Exception as e:
+        analys = f"Fel: {str(e)}"
+
+    return jsonify({"analys": analys})
+
+
+@app.route("/tracker/<int:tracker_id>/avsluta", methods=["POST"])
+@inloggning_kravs
+def tracker_avsluta(tracker_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE tankar SET avslutad=1 WHERE id=?", (tracker_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
