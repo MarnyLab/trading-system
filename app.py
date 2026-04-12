@@ -7,10 +7,14 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import anthropic
 import os
-import sqlite3
 import json
 import base64
 import email as email_lib
+try:
+    import psycopg2
+    import psycopg2.extras
+except ImportError:
+    psycopg2 = None
 from dotenv import load_dotenv
 from functools import wraps
 try:
@@ -30,14 +34,38 @@ app.secret_key = "trading-system-secret-2026"
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 # ── Databas ────────────────────────────────────────────────
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 DB_PATH = "trading.db"
 
+def get_conn():
+    """Returnerar databasanslutning - Supabase (PostgreSQL) eller SQLite."""
+    if DATABASE_URL and psycopg2:
+        conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+        return conn, "postgres"
+    else:
+        import sqlite3 as _sqlite3
+        conn = _sqlite3.connect(DB_PATH)
+        return conn, "sqlite"
+
+def q(sql, db_type):
+    """Konverterar SQLite ? till PostgreSQL %s."""
+    if db_type == "postgres":
+        return sql.replace("?", "%s")
+    return sql
+
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute("""
+    if db_type == "postgres":
+        serial = "SERIAL PRIMARY KEY"
+        integer_pk = "INTEGER PRIMARY KEY"
+    else:
+        serial = "INTEGER PRIMARY KEY AUTOINCREMENT"
+        integer_pk = "INTEGER PRIMARY KEY"
+
+    c.execute(f"""
         CREATE TABLE IF NOT EXISTS konversationer (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {serial},
             datum TEXT NOT NULL,
             titel TEXT,
             meddelanden TEXT NOT NULL,
@@ -45,32 +73,32 @@ def init_db():
             skapad TEXT NOT NULL
         )
     """)
-    c.execute("""
+    c.execute(f"""
         CREATE TABLE IF NOT EXISTS dokument (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {serial},
             filnamn TEXT NOT NULL,
             innehall TEXT NOT NULL,
             uppladdad TEXT NOT NULL
         )
     """)
-    c.execute("""
+    c.execute(f"""
         CREATE TABLE IF NOT EXISTS gmail_token (
-            id INTEGER PRIMARY KEY,
+            id {integer_pk},
             token_json TEXT NOT NULL,
             uppdaterad TEXT NOT NULL
         )
     """)
-    c.execute("""
+    c.execute(f"""
         CREATE TABLE IF NOT EXISTS dagliga_analyser (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {serial},
             datum TEXT NOT NULL,
             analys TEXT NOT NULL,
             skapad TEXT NOT NULL
         )
     """)
-    c.execute("""
+    c.execute(f"""
         CREATE TABLE IF NOT EXISTS tankar (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {serial},
             datum TEXT NOT NULL,
             index_namn TEXT NOT NULL,
             kurs_start REAL NOT NULL,
@@ -104,7 +132,7 @@ GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 GMAIL_REDIRECT_URI = "https://trading-system-r7ii.onrender.com/gmail/callback"
 
 def hamta_gmail_credentials():
-    conn = sqlite3.connect(DB_PATH)
+    conn, db_type = get_conn()
     c = conn.cursor()
     c.execute("SELECT token_json FROM gmail_token WHERE id=1")
     rad = c.fetchone()
@@ -118,29 +146,30 @@ def hamta_gmail_credentials():
     return creds
 
 def spara_gmail_token(creds):
-    conn = sqlite3.connect(DB_PATH)
+    conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO gmail_token (id, token_json, uppdaterad) VALUES (1, ?, ?)",
+    sql = "INSERT INTO gmail_token (id, token_json, uppdaterad) VALUES (1, %s, %s) ON CONFLICT (id) DO UPDATE SET token_json=EXCLUDED.token_json, uppdaterad=EXCLUDED.uppdaterad" if db_type == "postgres" else "INSERT OR REPLACE INTO gmail_token (id, token_json, uppdaterad) VALUES (1, ?, ?)"
+    c.execute(sql,
               (creds.to_json(), datetime.now().strftime("%Y-%m-%d %H:%M")))
     conn.commit()
     conn.close()
 
 def spara_konversation(titel, meddelanden, marknadsdata):
-    conn = sqlite3.connect(DB_PATH)
+    conn, db_type = get_conn()
     c = conn.cursor()
     datum  = datetime.now().strftime("%Y-%m-%d")
     skapad = datetime.now().strftime("%Y-%m-%d %H:%M")
-    c.execute(
-        "INSERT INTO konversationer (datum, titel, meddelanden, marknadsdata, skapad) VALUES (?, ?, ?, ?, ?)",
+    c.execute(q(
+        "INSERT INTO konversationer (datum, titel, meddelanden, marknadsdata, skapad) VALUES (?, ?, ?, ?, ?)", db_type),
         (datum, titel, json.dumps(meddelanden, ensure_ascii=False), marknadsdata, skapad)
     )
     conn.commit()
     conn.close()
 
 def hamta_tidigare_konversationer(antal=3):
-    conn = sqlite3.connect(DB_PATH)
+    conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute("SELECT datum, titel, meddelanden, marknadsdata FROM konversationer ORDER BY id DESC LIMIT ?", (antal,))
+    c.execute(q("SELECT datum, titel, meddelanden, marknadsdata FROM konversationer ORDER BY id DESC LIMIT ?", db_type), (antal,))
     rader = c.fetchall()
     conn.close()
     resultat = []
@@ -150,7 +179,7 @@ def hamta_tidigare_konversationer(antal=3):
     return resultat
 
 def hamta_alla_konversationer():
-    conn = sqlite3.connect(DB_PATH)
+    conn, db_type = get_conn()
     c = conn.cursor()
     c.execute("SELECT id, datum, titel, skapad FROM konversationer ORDER BY id DESC")
     rader = c.fetchall()
@@ -158,15 +187,15 @@ def hamta_alla_konversationer():
     return [{"id": r[0], "datum": r[1], "titel": r[2], "skapad": r[3]} for r in rader]
 
 def spara_dokument(filnamn, innehall):
-    conn = sqlite3.connect(DB_PATH)
+    conn, db_type = get_conn()
     c = conn.cursor()
     uppladdad = datetime.now().strftime("%Y-%m-%d %H:%M")
-    c.execute("INSERT INTO dokument (filnamn, innehall, uppladdad) VALUES (?, ?, ?)", (filnamn, innehall, uppladdad))
+    c.execute(q("INSERT INTO dokument (filnamn, innehall, uppladdad) VALUES (?, ?, ?)", db_type), (filnamn, innehall, uppladdad))
     conn.commit()
     conn.close()
 
 def hamta_alla_dokument():
-    conn = sqlite3.connect(DB_PATH)
+    conn, db_type = get_conn()
     c = conn.cursor()
     c.execute("SELECT id, filnamn, uppladdad FROM dokument ORDER BY id DESC")
     rader = c.fetchall()
@@ -689,9 +718,9 @@ def analytiker_chatt():
 
     dok_text = ""
     if dokument_id:
-        conn = sqlite3.connect(DB_PATH)
+        conn, db_type = get_conn()
         c = conn.cursor()
-        c.execute("SELECT filnamn, innehall FROM dokument WHERE id=?", (dokument_id,))
+        c.execute(q("SELECT filnamn, innehall FROM dokument WHERE id=?", db_type), (dokument_id,))
         rad = c.fetchone()
         conn.close()
         if rad:
@@ -810,9 +839,9 @@ def analyslogg():
 @app.route("/analyslogg/<int:konv_id>")
 @inloggning_kravs
 def visa_analys(konv_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute("SELECT datum, titel, meddelanden, marknadsdata, skapad FROM konversationer WHERE id=?", (konv_id,))
+    c.execute(q("SELECT datum, titel, meddelanden, marknadsdata, skapad FROM konversationer WHERE id=?", db_type), (konv_id,))
     rad = c.fetchone()
     conn.close()
     if not rad:
@@ -877,9 +906,9 @@ def dokument_sida():
 @app.route("/dokument/<int:dok_id>")
 @inloggning_kravs
 def visa_dokument(dok_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute("SELECT filnamn, innehall, uppladdad FROM dokument WHERE id=?", (dok_id,))
+    c.execute(q("SELECT filnamn, innehall, uppladdad FROM dokument WHERE id=?", db_type), (dok_id,))
     rad = c.fetchone()
     conn.close()
     if not rad:
@@ -1133,10 +1162,10 @@ def kör_daglig_analys():
         alla_dok = hamta_alla_dokument()
         dok_kontext = ""
         if alla_dok:
-            conn = sqlite3.connect(DB_PATH)
+            conn, db_type = get_conn()
             c = conn.cursor()
             for d in alla_dok[:5]:
-                c.execute("SELECT innehall FROM dokument WHERE id=?", (d["id"],))
+                c.execute(q("SELECT innehall FROM dokument WHERE id=?", db_type), (d["id"],))
                 rad = c.fetchone()
                 if rad:
                     dok_kontext += "\n\n--- " + d["filnamn"] + " (" + d["uppladdad"] + ") ---\n" + rad[0][:1500]
@@ -1154,9 +1183,9 @@ def kör_daglig_analys():
         analys_text = svar.content[0].text
 
         # 5. Spara analysen
-        conn = sqlite3.connect(DB_PATH)
+        conn, db_type = get_conn()
         c = conn.cursor()
-        c.execute("INSERT INTO dagliga_analyser (datum, analys, skapad) VALUES (?, ?, ?)",
+        c.execute(q("INSERT INTO dagliga_analyser (datum, analys, skapad) VALUES (?, ?, ?)", db_type),
                   (datetime.now().strftime("%Y-%m-%d"), analys_text, datetime.now().strftime("%Y-%m-%d %H:%M")))
         conn.commit()
         conn.close()
@@ -1168,7 +1197,7 @@ def kör_daglig_analys():
 @app.route("/daglig-analys")
 @inloggning_kravs
 def daglig_analys_sida():
-    conn = sqlite3.connect(DB_PATH)
+    conn, db_type = get_conn()
     c = conn.cursor()
     c.execute("SELECT id, datum, analys, skapad FROM dagliga_analyser ORDER BY id DESC LIMIT 10")
     rader = c.fetchall()
@@ -1205,7 +1234,7 @@ def daglig_analys_sida():
 @app.route("/tracker")
 @inloggning_kravs
 def tracker_sida():
-    conn = sqlite3.connect(DB_PATH)
+    conn, db_type = get_conn()
     c = conn.cursor()
     c.execute("""SELECT id, datum, index_namn, kurs_start, riktning, mal_niva, mal_procent, 
                  period, kommentar, avslutad FROM tankar ORDER BY id DESC""")
@@ -1376,7 +1405,7 @@ def tracker_ny():
     except:
         kurs_start = 0.0
 
-    conn = sqlite3.connect(DB_PATH)
+    conn, db_type = get_conn()
     c = conn.cursor()
     c.execute("""INSERT INTO tankar 
         (datum, index_namn, kurs_start, riktning, mal_niva, mal_procent, period, kommentar, avslutad, skapad)
@@ -1393,9 +1422,9 @@ def tracker_ny():
 @app.route("/tracker/<int:tracker_id>/analysera", methods=["POST"])
 @inloggning_kravs
 def tracker_analysera(tracker_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute("SELECT datum, index_namn, kurs_start, riktning, mal_niva, mal_procent, period, kommentar FROM tankar WHERE id=?", (tracker_id,))
+    c.execute(q("SELECT datum, index_namn, kurs_start, riktning, mal_niva, mal_procent, period, kommentar FROM tankar WHERE id=?", db_type), (tracker_id,))
     rad = c.fetchone()
     conn.close()
     if not rad:
@@ -1468,9 +1497,9 @@ Analysera:
 @app.route("/tracker/<int:tracker_id>/avsluta", methods=["POST"])
 @inloggning_kravs
 def tracker_avsluta(tracker_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute("UPDATE tankar SET avslutad=1 WHERE id=?", (tracker_id,))
+    c.execute(q("UPDATE tankar SET avslutad=1 WHERE id=?", db_type), (tracker_id,))
     conn.commit()
     conn.close()
     return jsonify({"status": "ok"})
