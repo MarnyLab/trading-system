@@ -10,6 +10,9 @@ import os
 import json
 import base64
 import email as email_lib
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 try:
     import psycopg2
     import psycopg2.extras
@@ -111,6 +114,37 @@ def init_db():
             skapad TEXT NOT NULL
         )
     """)
+    c.execute(f"""
+        CREATE TABLE IF NOT EXISTS prisalarm (
+            id {serial},
+            ticker TEXT NOT NULL,
+            namn TEXT NOT NULL,
+            niva REAL NOT NULL,
+            riktning TEXT NOT NULL,
+            email TEXT NOT NULL,
+            aktiv INTEGER DEFAULT 1,
+            utlost INTEGER DEFAULT 0,
+            skapad TEXT NOT NULL
+        )
+    """)
+    c.execute(f"""
+        CREATE TABLE IF NOT EXISTS portfoljer (
+            id {serial},
+            namn TEXT NOT NULL,
+            niva TEXT NOT NULL,
+            skapad TEXT NOT NULL
+        )
+    """)
+    c.execute(f"""
+        CREATE TABLE IF NOT EXISTS portfolj_innehav (
+            id {serial},
+            portfolj_id INTEGER NOT NULL,
+            ticker TEXT NOT NULL,
+            namn TEXT NOT NULL,
+            andel REAL NOT NULL,
+            skapad TEXT NOT NULL
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -128,7 +162,10 @@ GMAIL_CLIENT_CONFIG = {
         "redirect_uris": ["https://trading-system-r7ii.onrender.com/gmail/callback"]
     }
 }
-GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+GMAIL_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.send",
+]
 GMAIL_REDIRECT_URI = "https://trading-system-r7ii.onrender.com/gmail/callback"
 
 def hamta_gmail_credentials():
@@ -153,6 +190,26 @@ def spara_gmail_token(creds):
               (creds.to_json(), datetime.now().strftime("%Y-%m-%d %H:%M")))
     conn.commit()
     conn.close()
+
+def skicka_alarm_mejl(till, subject, body):
+    """Skickar e-post via Gmail SMTP (kräver SMTP_USER + SMTP_PASS i .env)."""
+    smtp_user = os.getenv("SMTP_USER", "")
+    smtp_pass = os.getenv("SMTP_PASS", "")
+    if not smtp_user or not smtp_pass:
+        return False
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = smtp_user
+        msg["To"]      = till
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+        return True
+    except Exception as e:
+        print(f"E-post fel: {e}")
+        return False
 
 def spara_konversation(titel, meddelanden, marknadsdata):
     conn, db_type = get_conn()
@@ -246,11 +303,14 @@ def hamta_data(ticker, yf_period="6mo", yf_interval="1d"):
         df["OBV"] = ta.volume.OnBalanceVolumeIndicator(close, df["Volume"].squeeze()).on_balance_volume()
     return df
 
-def sammanfatta(namn, df):
-    senaste      = float(df["Close"].iloc[-1])
-    ix           = min(22, len(df) - 1)
-    for_en_manad = float(df["Close"].iloc[-ix])
-    forandring   = (senaste - for_en_manad) / for_en_manad * 100
+def sammanfatta(namn, df, use_full_range=False):
+    senaste = float(df["Close"].iloc[-1])
+    if use_full_range:
+        referens = float(df["Close"].iloc[0])
+    else:
+        ix = min(22, len(df) - 1)
+        referens = float(df["Close"].iloc[-ix])
+    forandring = (senaste - referens) / referens * 100
     rsi          = round(float(df["RSI"].iloc[-1]), 1)
     sma50        = float(df["SMA50"].iloc[-1]) if "SMA50" in df.columns else None
     sma200       = float(df["SMA200"].iloc[-1]) if "SMA200" in df.columns else None
@@ -277,7 +337,7 @@ def hamta_marknadsdata():
     rader = []
     for namn, ticker in TICKERS.items():
         try:
-            df = hamta_data(ticker, yf_period="3mo", yf_interval="1d")
+            df = hamta_data(ticker, yf_period="1y", yf_interval="1d")
             s  = sammanfatta(namn, df)
             rader.append(
                 f"{namn}: Kurs {s['kurs']:.2f}, RSI {s['rsi']} ({s['rsi_text']}), "
@@ -333,6 +393,8 @@ def skapa_diagram(namn, df, interval_label="Daily"):
         yaxis2=dict(gridcolor="#dddddd", side="right"),
         yaxis3=dict(gridcolor="#dddddd", side="right"),
     )
+    for ann in fig.layout.annotations:
+        ann.update(x=0.5, xanchor="center", xref="paper")
     return fig.to_html(full_html=False, include_plotlyjs="cdn")
 
 
@@ -347,6 +409,8 @@ NAV_HTML = """
     <a href="/gmail" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Gmail</a>
     <a href="/daglig-analys" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Daglig Analys</a>
     <a href="/tracker" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Tracker</a>
+    <a href="/prisalarm" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Prisalarm</a>
+    <a href="/portfolio" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Portfölj</a>
     <a href="/logout" style="color:#999; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em; margin-left:auto;">Logga ut</a>
 </nav>
 """
@@ -426,7 +490,7 @@ def logout():
 def dashboard():
     kort = []
     for namn, ticker in TICKERS.items():
-        df = hamta_data(ticker, yf_period="6mo", yf_interval="1d")
+        df = hamta_data(ticker, yf_period="1y", yf_interval="1d")
         kort.append(sammanfatta(namn, df))
     uppdaterad = datetime.now().strftime("%Y-%m-%d %H:%M")
     html = """<!DOCTYPE html><html>
@@ -475,7 +539,7 @@ def detalj(namn):
     if aktiv_period not in PERIOD_MAP: aktiv_period = "Daily"
     if aktiv_range not in RANGE_MAP:   aktiv_range  = "6 Months"
     df = hamta_data(ticker, yf_period=RANGE_MAP[aktiv_range], yf_interval=PERIOD_MAP[aktiv_period])
-    s  = sammanfatta(namn, df)
+    s  = sammanfatta(namn, df, use_full_range=True)
     diagram_html = skapa_diagram(namn, df, interval_label=aktiv_period)
     period_opts = "".join(f'<option value="{p}" {"selected" if p == aktiv_period else ""}>{p}</option>' for p in PERIOD_MAP)
     range_opts  = "".join(f'<option value="{r}" {"selected" if r == aktiv_range else ""}>{r}</option>' for r in RANGE_MAP)
@@ -493,7 +557,7 @@ def detalj(namn):
         <h1>{{ namn }}</h1>
         <div class="kurs">{{ "%.2f"|format(s.kurs) }}</div>
         <div class="forandring" style="color: {{ '#007700' if s.forandring > 0 else '#cc0000' }}">
-            {{ "%+.2f"|format(s.forandring) }}% senaste perioden
+            {{ "%+.2f"|format(s.forandring) }}% ({{ aktiv_range }})
         </div>
         <div class="info-rad">
             <div class="info-box"><div class="etikett">Trend</div><div class="varde" style="color:{{ s.trend_farg }}">{{ s.trend }}</div></div>
@@ -510,7 +574,8 @@ def detalj(namn):
         {{ diagram_html|safe }}
     </body></html>"""
     return render_template_string(html, namn=namn, s=s, diagram_html=diagram_html,
-                                  period_opts=period_opts, range_opts=range_opts)
+                                  period_opts=period_opts, range_opts=range_opts,
+                                  aktiv_range=aktiv_range)
 
 
 @app.route("/analytiker")
@@ -1356,9 +1421,11 @@ def tracker_sida():
                 {% if not t.avslutad %}
                 <div class="btn-rad">
                     <button class="btn-liten btn-analys" onclick="analyseraTracker({{ t.id }}, this)">AI-analys nu</button>
+                    <button class="btn-liten" style="background:#555;color:#fff;" onclick="visaGraf({{ t.id }}, this)">Visa graf</button>
                     <button class="btn-liten btn-avsluta" onclick="avslutaTracker({{ t.id }})">Avsluta</button>
                 </div>
                 {% endif %}
+                <div id="graf-{{ t.id }}" style="display:none; margin-top:10px;"></div>
                 <div id="ai-{{ t.id }}" class="ai-kommentar" style="display:none;"></div>
             </div>
         {% endfor %}
@@ -1382,6 +1449,16 @@ def tracker_sida():
             if (!confirm('Avsluta trackern?')) return;
             await fetch('/tracker/' + id + '/avsluta', {method: 'POST'});
             location.reload();
+        }
+        async function visaGraf(id, btn) {
+            const el = document.getElementById('graf-' + id);
+            if (el.style.display !== 'none') { el.style.display = 'none'; btn.textContent = 'Visa graf'; return; }
+            btn.textContent = 'Laddar...';
+            const svar = await fetch('/tracker/' + id + '/graf');
+            const data = await svar.json();
+            el.innerHTML = data.html;
+            el.style.display = 'block';
+            btn.textContent = 'Dölj graf';
         }
         </script>
     </body></html>"""
@@ -1407,9 +1484,9 @@ def tracker_ny():
 
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute("""INSERT INTO tankar 
+    c.execute(q("""INSERT INTO tankar
         (datum, index_namn, kurs_start, riktning, mal_niva, mal_procent, period, kommentar, avslutad, skapad)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""", db_type),
         (datetime.now().strftime("%Y-%m-%d"), index_namn, kurs_start,
          riktning, float(mal_niva) if mal_niva else None,
          float(mal_procent) if mal_procent else None,
@@ -1503,6 +1580,495 @@ def tracker_avsluta(tracker_id):
     conn.commit()
     conn.close()
     return jsonify({"status": "ok"})
+
+# ── Tracker graf ──────────────────────────────────────────
+@app.route("/tracker/<int:tracker_id>/graf")
+@inloggning_kravs
+def tracker_graf(tracker_id):
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute(q("SELECT datum, index_namn, kurs_start, riktning, mal_niva FROM tankar WHERE id=?", db_type), (tracker_id,))
+    rad = c.fetchone()
+    conn.close()
+    if not rad:
+        return jsonify({"html": "Tracker hittades inte."})
+    datum, index_namn, kurs_start, riktning, mal_niva = rad
+    ticker = TICKERS.get(index_namn, "^OMX")
+    try:
+        df = hamta_data(ticker, yf_period="1y", yf_interval="1d")
+        start_ts = pd.Timestamp(datetime.strptime(datum, "%Y-%m-%d"))
+        df_f = df[df.index >= start_ts]
+        if len(df_f) < 2:
+            df_f = df.tail(30)
+        close    = df_f["Close"].squeeze()
+        x_labels = [d.strftime("%d %b") for d in df_f.index]
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=x_labels, y=close, mode="lines",
+                                 line=dict(color="#0044cc", width=2), name=index_namn))
+        fig.add_hline(y=kurs_start, line=dict(color="#888", width=1, dash="dash"),
+                      annotation_text=f"Start {kurs_start:.2f}", annotation_position="top right")
+        if mal_niva:
+            col = "#007700" if riktning == "Upp" else "#cc0000"
+            fig.add_hline(y=float(mal_niva), line=dict(color=col, width=1, dash="dot"),
+                          annotation_text=f"Mål {float(mal_niva):.2f}", annotation_position="bottom right")
+        fig.update_layout(
+            paper_bgcolor="#ffffff", plot_bgcolor="#f8f8f8",
+            height=260, margin=dict(l=10, r=70, t=16, b=36),
+            showlegend=False,
+            xaxis=dict(type="category", gridcolor="#dddddd", tickangle=-45, tickfont=dict(size=9)),
+            yaxis=dict(gridcolor="#dddddd", side="right"),
+        )
+        return jsonify({"html": fig.to_html(full_html=False, include_plotlyjs="cdn")})
+    except Exception as e:
+        return jsonify({"html": f"Fel: {e}"})
+
+
+# ── Prisalarm ─────────────────────────────────────────────
+
+@app.route("/prisalarm")
+@inloggning_kravs
+def prisalarm_sida():
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT id, ticker, namn, niva, riktning, email, aktiv, utlost, skapad FROM prisalarm ORDER BY id DESC")
+    rader   = c.fetchall()
+    conn.close()
+    alarm_lista = [{
+        "id": r[0], "ticker": r[1], "namn": r[2], "niva": r[3],
+        "riktning": r[4], "email": r[5], "aktiv": r[6], "utlost": r[7], "skapad": r[8]
+    } for r in rader]
+
+    index_opts = "".join(
+        f'<option value="{t}" data-ticker="{v}">{t}</option>' for t, v in TICKERS.items()
+    )
+    smtp_ok = bool(os.getenv("SMTP_USER") and os.getenv("SMTP_PASS"))
+
+    html = """<!DOCTYPE html><html>
+    <head><title>Prisalarm</title><meta charset="utf-8">""" + BASE_STYLE + """
+    <style>
+        .alarm-form { background:#fff; border-radius:10px; padding:24px; border:1px solid #ddd; max-width:600px; margin-bottom:30px; }
+        .fg { margin-bottom:12px; }
+        .fg label { display:block; color:#888; font-size:0.82em; font-weight:bold; margin-bottom:4px; }
+        .fg input, .fg select { width:100%; padding:9px 12px; border:1px solid #ccc; border-radius:6px; font-size:0.95em; }
+        .row2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+        .badge-over { background:#e6f4e6; color:#007700; padding:2px 9px; border-radius:12px; font-size:0.82em; font-weight:bold; }
+        .badge-under { background:#fce8e8; color:#cc0000; padding:2px 9px; border-radius:12px; font-size:0.82em; font-weight:bold; }
+        .badge-utlost { background:#fff8e6; color:#886600; padding:2px 9px; border-radius:12px; font-size:0.82em; }
+        .smtp-warn { background:#fff3cd; border:1px solid #ffc107; border-radius:6px; padding:10px 14px; margin-bottom:18px; font-size:0.88em; color:#856404; }
+    </style></head>
+    <body>""" + NAV_HTML + """
+        <h1>Prisalarm</h1>
+        {% if not smtp_ok %}
+        <div class="smtp-warn">⚠ Inga SMTP-uppgifter konfigurerade. Sätt <strong>SMTP_USER</strong> och <strong>SMTP_PASS</strong> i miljövariablerna för att aktivera e-postutskick.</div>
+        {% endif %}
+        <div class="alarm-form">
+            <h2 style="font-size:1em; color:#444; margin-bottom:16px;">+ Nytt alarm</h2>
+            <form method="POST" action="/prisalarm/ny">
+                <div class="row2">
+                    <div class="fg">
+                        <label>Index</label>
+                        <select name="namn" id="alarm-namn">""" + index_opts + """</select>
+                    </div>
+                    <div class="fg">
+                        <label>Ticker (anpassa vid behov)</label>
+                        <input type="text" name="ticker" id="alarm-ticker" placeholder="t.ex. ^OMX">
+                    </div>
+                </div>
+                <div class="row2">
+                    <div class="fg">
+                        <label>Kursnivå</label>
+                        <input type="number" step="0.01" name="niva" placeholder="t.ex. 2500" required>
+                    </div>
+                    <div class="fg">
+                        <label>Riktning</label>
+                        <select name="riktning">
+                            <option value="OVER">Kurs går ÖVER nivån</option>
+                            <option value="UNDER">Kurs går UNDER nivån</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="fg">
+                    <label>E-post att notifiera</label>
+                    <input type="email" name="email" placeholder="din@epost.se" required>
+                </div>
+                <button type="submit" style="padding:9px 24px; background:#0044cc; color:#fff; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">Spara alarm</button>
+            </form>
+        </div>
+        {% if alarm_lista %}
+        <table class="tabell" style="max-width:860px;">
+            <thead><tr><th>Index</th><th>Ticker</th><th>Nivå</th><th>Riktning</th><th>E-post</th><th>Status</th><th>Skapad</th><th></th></tr></thead>
+            <tbody>
+            {% for a in alarm_lista %}
+            <tr style="opacity: {{ '0.5' if not a.aktiv else '1' }};">
+                <td><strong>{{ a.namn }}</strong></td>
+                <td style="color:#888; font-size:0.88em;">{{ a.ticker }}</td>
+                <td><strong>{{ "%.2f"|format(a.niva) }}</strong></td>
+                <td>
+                    {% if a.riktning == 'OVER' %}<span class="badge-over">↑ Över</span>
+                    {% else %}<span class="badge-under">↓ Under</span>{% endif %}
+                </td>
+                <td style="font-size:0.88em;">{{ a.email }}</td>
+                <td>
+                    {% if a.utlost %}<span class="badge-utlost">Utlöst</span>
+                    {% elif a.aktiv %}<span style="color:#007700; font-size:0.88em;">Aktivt</span>
+                    {% else %}<span style="color:#888; font-size:0.88em;">Inaktivt</span>{% endif %}
+                </td>
+                <td style="font-size:0.82em; color:#888;">{{ a.skapad[:10] }}</td>
+                <td>
+                    <form method="POST" action="/prisalarm/{{ a.id }}/ta-bort" style="display:inline;">
+                        <button type="submit" style="background:none; border:none; color:#cc0000; cursor:pointer; font-size:0.85em;">Ta bort</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color:#888;">Inga alarm inställda ännu.</p>
+        {% endif %}
+        <script>
+        const tickerMap = """ + json.dumps({t: v for t, v in TICKERS.items()}) + """;
+        document.getElementById('alarm-namn').addEventListener('change', function() {
+            document.getElementById('alarm-ticker').value = tickerMap[this.value] || '';
+        });
+        document.getElementById('alarm-ticker').value = tickerMap[document.getElementById('alarm-namn').value] || '';
+        </script>
+    </body></html>"""
+    return render_template_string(html, alarm_lista=alarm_lista, smtp_ok=smtp_ok)
+
+
+@app.route("/prisalarm/ny", methods=["POST"])
+@inloggning_kravs
+def prisalarm_ny():
+    namn    = request.form.get("namn", "")
+    ticker  = request.form.get("ticker", "").strip()
+    niva    = float(request.form.get("niva", 0))
+    riktning = request.form.get("riktning", "OVER")
+    email   = request.form.get("email", "").strip()
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute(q("INSERT INTO prisalarm (ticker, namn, niva, riktning, email, aktiv, utlost, skapad) VALUES (?,?,?,?,?,1,0,?)", db_type),
+              (ticker, namn, niva, riktning, email, datetime.now().strftime("%Y-%m-%d %H:%M")))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("prisalarm_sida"))
+
+
+@app.route("/prisalarm/<int:alarm_id>/ta-bort", methods=["POST"])
+@inloggning_kravs
+def prisalarm_ta_bort(alarm_id):
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute(q("DELETE FROM prisalarm WHERE id=?", db_type), (alarm_id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("prisalarm_sida"))
+
+
+@app.route("/cron/kolla-alarm")
+def cron_kolla_alarm():
+    """Kontrollerar aktiva prisalarm och skickar e-post vid träff."""
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT id, ticker, namn, niva, riktning, email FROM prisalarm WHERE aktiv=1 AND utlost=0")
+    alarm = c.fetchall()
+    conn.close()
+    utlosta = []
+    for aid, ticker, namn, niva, riktning, email in alarm:
+        try:
+            df = yf.download(ticker, period="2d", interval="1d", progress=False, auto_adjust=True)
+            if df.empty:
+                continue
+            kurs = float(df["Close"].iloc[-1])
+            utlost = (riktning == "OVER" and kurs >= niva) or (riktning == "UNDER" and kurs <= niva)
+            if utlost:
+                rikt_text = f"gått ÖVER {niva:.2f}" if riktning == "OVER" else f"gått UNDER {niva:.2f}"
+                subject = f"Prisalarm: {namn} har {rikt_text}"
+                body    = (f"Ditt prisalarm har utlösts!\n\n"
+                           f"Index:   {namn} ({ticker})\n"
+                           f"Nivå:    {niva:.2f}\n"
+                           f"Aktuell kurs: {kurs:.2f}\n"
+                           f"Tid: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                           f"Trading Dashboard")
+                skicka_alarm_mejl(email, subject, body)
+                conn2, db_type2 = get_conn()
+                c2 = conn2.cursor()
+                c2.execute(q("UPDATE prisalarm SET utlost=1, aktiv=0 WHERE id=?", db_type2), (aid,))
+                conn2.commit()
+                conn2.close()
+                utlosta.append(f"{namn} @ {kurs:.2f}")
+        except Exception as e:
+            print(f"Alarm-fel {aid}: {e}")
+    return jsonify({"utlosta": utlosta, "kontrollerade": len(alarm)})
+
+
+# ── Portfölj ──────────────────────────────────────────────
+
+NIVA_FARGER = {"Konservativ": "#007700", "Balanserad": "#0044cc", "Aggressiv": "#cc5500"}
+
+def hamta_portfolj_kurs(ticker):
+    try:
+        df = yf.download(ticker, period="5d", interval="1d", progress=False, auto_adjust=True)
+        if df.empty:
+            return None, None
+        kurs = float(df["Close"].iloc[-1])
+        if len(df) >= 2:
+            prev  = float(df["Close"].iloc[-2])
+            daglig = (kurs - prev) / prev * 100
+        else:
+            daglig = 0.0
+        return kurs, daglig
+    except:
+        return None, None
+
+
+@app.route("/portfolio")
+@inloggning_kravs
+def portfolio_sida():
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT id, namn, niva, skapad FROM portfoljer ORDER BY niva, namn")
+    rader = c.fetchall()
+    conn.close()
+    portfoljer = [{"id": r[0], "namn": r[1], "niva": r[2], "skapad": r[3]} for r in rader]
+
+    html = """<!DOCTYPE html><html>
+    <head><title>Portföljer</title><meta charset="utf-8">""" + BASE_STYLE + """
+    <style>
+        .ny-form { background:#fff; border-radius:10px; padding:22px; border:1px solid #ddd; max-width:480px; margin-bottom:30px; }
+        .fg { margin-bottom:12px; }
+        .fg label { display:block; color:#888; font-size:0.82em; font-weight:bold; margin-bottom:4px; }
+        .fg input, .fg select { width:100%; padding:9px 12px; border:1px solid #ccc; border-radius:6px; font-size:0.95em; }
+        .p-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px,1fr)); gap:16px; }
+        .p-kort { background:#fff; border-radius:10px; padding:20px; border:1px solid #ddd; cursor:pointer; transition: box-shadow 0.15s; }
+        .p-kort:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .niva-badge { display:inline-block; padding:3px 10px; border-radius:12px; font-size:0.8em; font-weight:bold; color:#fff; margin-bottom:10px; }
+    </style></head>
+    <body>""" + NAV_HTML + """
+        <h1>Portföljer</h1>
+        <div class="ny-form">
+            <h2 style="font-size:1em; color:#444; margin-bottom:14px;">+ Ny portfölj</h2>
+            <form method="POST" action="/portfolio/ny">
+                <div class="fg"><label>Namn</label><input type="text" name="namn" placeholder="Min portfölj" required></div>
+                <div class="fg">
+                    <label>Risknivå</label>
+                    <select name="niva">
+                        <option value="Konservativ">Konservativ – lägre risk, stabil avkastning</option>
+                        <option value="Balanserad" selected>Balanserad – mix aktier/räntor</option>
+                        <option value="Aggressiv">Aggressiv – hög risk, hög potential</option>
+                    </select>
+                </div>
+                <button type="submit" style="padding:9px 24px; background:#0044cc; color:#fff; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">Skapa portfölj</button>
+            </form>
+        </div>
+        {% if portfoljer %}
+        <div class="p-grid">
+        {% for p in portfoljer %}
+            <a href="/portfolio/{{ p.id }}" style="text-decoration:none; color:inherit;">
+            <div class="p-kort">
+                <div class="niva-badge" style="background:{{ niva_farger.get(p.niva, '#888') }};">{{ p.niva }}</div>
+                <div style="font-size:1.15em; font-weight:bold; color:#111; margin-bottom:6px;">{{ p.namn }}</div>
+                <div style="color:#888; font-size:0.82em;">Skapad {{ p.skapad[:10] }}</div>
+            </div>
+            </a>
+        {% endfor %}
+        </div>
+        {% else %}
+        <p style="color:#888;">Inga portföljer skapade ännu.</p>
+        {% endif %}
+    </body></html>"""
+    return render_template_string(html, portfoljer=portfoljer, niva_farger=NIVA_FARGER)
+
+
+@app.route("/portfolio/ny", methods=["POST"])
+@inloggning_kravs
+def portfolio_ny():
+    namn = request.form.get("namn", "").strip()
+    niva = request.form.get("niva", "Balanserad")
+    if namn:
+        conn, db_type = get_conn()
+        c = conn.cursor()
+        c.execute(q("INSERT INTO portfoljer (namn, niva, skapad) VALUES (?,?,?)", db_type),
+                  (namn, niva, datetime.now().strftime("%Y-%m-%d %H:%M")))
+        conn.commit()
+        conn.close()
+    return redirect(url_for("portfolio_sida"))
+
+
+@app.route("/portfolio/<int:portfolj_id>")
+@inloggning_kravs
+def portfolio_detalj(portfolj_id):
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute(q("SELECT namn, niva, skapad FROM portfoljer WHERE id=?", db_type), (portfolj_id,))
+    prad = c.fetchone()
+    if not prad:
+        conn.close()
+        return "Portfölj hittades inte", 404
+    c.execute(q("SELECT id, ticker, namn, andel FROM portfolj_innehav WHERE portfolj_id=? ORDER BY andel DESC", db_type), (portfolj_id,))
+    hrader = c.fetchall()
+    conn.close()
+
+    innehav = []
+    total_daglig = 0.0
+    total_andel  = sum(r[3] for r in hrader)
+    for hid, ticker, namn_h, andel in hrader:
+        kurs, daglig = hamta_portfolj_kurs(ticker)
+        vikt = andel / total_andel if total_andel else 0
+        if daglig is not None:
+            total_daglig += daglig * vikt
+        innehav.append({"id": hid, "ticker": ticker, "namn": namn_h,
+                         "andel": andel, "kurs": kurs, "daglig": daglig})
+
+    portfolj_namn, niva, skapad = prad
+    farv = NIVA_FARGER.get(niva, "#888")
+
+    # Pie chart för allokering
+    pie_html = ""
+    if innehav:
+        fig = go.Figure(go.Pie(
+            labels=[h["namn"] or h["ticker"] for h in innehav],
+            values=[h["andel"] for h in innehav],
+            hole=0.45,
+            textinfo="label+percent",
+            marker=dict(colors=["#0044cc","#007700","#cc5500","#884488","#886600",
+                                  "#008888","#cc0000","#445588","#558844","#885544"])
+        ))
+        fig.update_layout(
+            paper_bgcolor="#ffffff", height=300, margin=dict(l=10,r=10,t=20,b=10),
+            showlegend=False
+        )
+        pie_html = fig.to_html(full_html=False, include_plotlyjs="cdn")
+
+    html = """<!DOCTYPE html><html>
+    <head><title>{{ pnamn }}</title><meta charset="utf-8">""" + BASE_STYLE + """
+    <style>
+        .niva-badge { display:inline-block; padding:3px 12px; border-radius:12px; font-size:0.82em; font-weight:bold; color:#fff; }
+        .top-info { display:flex; gap:16px; align-items:center; margin-bottom:24px; flex-wrap:wrap; }
+        .daglig-total { font-size:1.6em; font-weight:bold; }
+        .innehav-form { background:#fff; border-radius:10px; padding:20px; border:1px solid #ddd; max-width:560px; margin-bottom:24px; }
+        .fg { margin-bottom:12px; }
+        .fg label { display:block; color:#888; font-size:0.82em; font-weight:bold; margin-bottom:4px; }
+        .fg input { width:100%; padding:9px 12px; border:1px solid #ccc; border-radius:6px; font-size:0.95em; }
+        .row3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+        .pie-wrap { background:#fff; border-radius:10px; padding:16px; border:1px solid #ddd; max-width:360px; }
+        .layout { display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start; }
+    </style></head>
+    <body>""" + NAV_HTML + """
+        <a href="/portfolio" style="color:#888; font-size:0.88em;">← Alla portföljer</a>
+        <div class="top-info" style="margin-top:14px;">
+            <div>
+                <h1 style="margin-bottom:4px;">{{ pnamn }}</h1>
+                <span class="niva-badge" style="background:{{ farv }};">{{ niva }}</span>
+            </div>
+            {% if innehav %}
+            <div style="margin-left:auto; text-align:right;">
+                <div style="color:#888; font-size:0.82em;">Daglig portföljförändring (vägd)</div>
+                <div class="daglig-total" style="color:{{ '#007700' if total_daglig >= 0 else '#cc0000' }}">
+                    {{ "%+.2f"|format(total_daglig) }}%
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="layout">
+            <div style="flex:1; min-width:300px;">
+                <div class="innehav-form">
+                    <h2 style="font-size:1em; color:#444; margin-bottom:14px;">+ Lägg till innehav</h2>
+                    <form method="POST" action="/portfolio/{{ pid }}/lagg-till">
+                        <div class="row3">
+                            <div class="fg"><label>Ticker</label><input type="text" name="ticker" placeholder="t.ex. XACT" required></div>
+                            <div class="fg"><label>Namn/Beskrivning</label><input type="text" name="namn" placeholder="t.ex. XACT OMX"></div>
+                            <div class="fg"><label>Andel (%)</label><input type="number" step="0.1" name="andel" placeholder="25" required></div>
+                        </div>
+                        <button type="submit" style="padding:8px 20px; background:#0044cc; color:#fff; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">Lägg till</button>
+                    </form>
+                </div>
+                {% if innehav %}
+                <table class="tabell">
+                    <thead><tr><th>Ticker</th><th>Namn</th><th>Andel</th><th>Kurs</th><th>Daglig %</th><th></th></tr></thead>
+                    <tbody>
+                    {% for h in innehav %}
+                    <tr>
+                        <td><strong>{{ h.ticker }}</strong></td>
+                        <td>{{ h.namn }}</td>
+                        <td>{{ "%.1f"|format(h.andel) }}%</td>
+                        <td>{% if h.kurs %}{{ "%.2f"|format(h.kurs) }}{% else %}<span style="color:#aaa;">–</span>{% endif %}</td>
+                        <td>{% if h.daglig is not none %}
+                            <span style="color:{{ '#007700' if h.daglig >= 0 else '#cc0000' }}">{{ "%+.2f"|format(h.daglig) }}%</span>
+                            {% else %}<span style="color:#aaa;">–</span>{% endif %}
+                        </td>
+                        <td>
+                            <form method="POST" action="/portfolio/{{ pid }}/ta-bort/{{ h.id }}" style="display:inline;">
+                                <button type="submit" style="background:none; border:none; color:#cc0000; cursor:pointer; font-size:0.85em;">✕</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <p style="color:#888;">Inga innehav ännu. Lägg till ovan.</p>
+                {% endif %}
+            </div>
+            {% if pie_html %}
+            <div class="pie-wrap">
+                <div style="font-size:0.85em; color:#666; font-weight:bold; margin-bottom:8px;">ALLOKERING</div>
+                {{ pie_html|safe }}
+            </div>
+            {% endif %}
+        </div>
+
+        <div style="margin-top:20px;">
+            <form method="POST" action="/portfolio/{{ pid }}/ta-bort-portfolj"
+                  onsubmit="return confirm('Ta bort hela portföljen?');">
+                <button type="submit" style="padding:7px 16px; background:#f0f0f0; color:#cc0000; border:1px solid #ddd; border-radius:6px; font-size:0.85em; cursor:pointer;">Ta bort portfölj</button>
+            </form>
+        </div>
+    </body></html>"""
+    return render_template_string(html, pnamn=portfolj_namn, niva=niva, farv=farv,
+                                  pid=portfolj_id, innehav=innehav,
+                                  total_daglig=total_daglig, pie_html=pie_html)
+
+
+@app.route("/portfolio/<int:portfolj_id>/lagg-till", methods=["POST"])
+@inloggning_kravs
+def portfolio_lagg_till(portfolj_id):
+    ticker = request.form.get("ticker", "").strip().upper()
+    namn   = request.form.get("namn", "").strip()
+    andel  = float(request.form.get("andel", 0) or 0)
+    if ticker and andel > 0:
+        conn, db_type = get_conn()
+        c = conn.cursor()
+        c.execute(q("INSERT INTO portfolj_innehav (portfolj_id, ticker, namn, andel, skapad) VALUES (?,?,?,?,?)", db_type),
+                  (portfolj_id, ticker, namn, andel, datetime.now().strftime("%Y-%m-%d %H:%M")))
+        conn.commit()
+        conn.close()
+    return redirect(url_for("portfolio_detalj", portfolj_id=portfolj_id))
+
+
+@app.route("/portfolio/<int:portfolj_id>/ta-bort/<int:innehav_id>", methods=["POST"])
+@inloggning_kravs
+def portfolio_ta_bort_innehav(portfolj_id, innehav_id):
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute(q("DELETE FROM portfolj_innehav WHERE id=? AND portfolj_id=?", db_type), (innehav_id, portfolj_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("portfolio_detalj", portfolj_id=portfolj_id))
+
+
+@app.route("/portfolio/<int:portfolj_id>/ta-bort-portfolj", methods=["POST"])
+@inloggning_kravs
+def portfolio_ta_bort(portfolj_id):
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute(q("DELETE FROM portfolj_innehav WHERE portfolj_id=?", db_type), (portfolj_id,))
+    c.execute(q("DELETE FROM portfoljer WHERE id=?", db_type), (portfolj_id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("portfolio_sida"))
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
