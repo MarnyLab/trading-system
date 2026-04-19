@@ -43,7 +43,7 @@ DB_PATH = "trading.db"
 def get_conn():
     """Returnerar databasanslutning - Supabase (PostgreSQL) eller SQLite."""
     if DATABASE_URL and psycopg2:
-        conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+        conn = psycopg2.connect(DATABASE_URL)
         return conn, "postgres"
     else:
         import sqlite3 as _sqlite3
