@@ -354,7 +354,7 @@ def skapa_diagram(namn, df, interval_label="Daily"):
     close, open_ = df["Close"].squeeze(), df["Open"].squeeze()
 
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
-                        row_heights=[0.60, 0.20, 0.20], vertical_spacing=0.02,
+                        row_heights=[0.58, 0.21, 0.21], vertical_spacing=0.06,
                         subplot_titles=("", "Volym", "MACD (12,26,9)"))
 
     fig.add_trace(go.Candlestick(
@@ -493,6 +493,24 @@ def dashboard():
         df = hamta_data(ticker, yf_period="1y", yf_interval="1d")
         kort.append(sammanfatta(namn, df))
     uppdaterad = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # Hämta portföljer för dashboard
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT id, namn, niva FROM portfoljer ORDER BY niva, namn")
+    portfoljer = [{"id": r[0], "namn": r[1], "niva": r[2]} for r in c.fetchall()]
+    for p in portfoljer:
+        c.execute(q("SELECT ticker, namn FROM portfolj_innehav WHERE portfolj_id=?", db_type), (p["id"],))
+        innehav = c.fetchall()
+        total_forandring = []
+        for ticker, _ in innehav:
+            kurs, daglig = hamta_portfolj_kurs(ticker)
+            if daglig is not None:
+                total_forandring.append(daglig)
+        p["antal"] = len(innehav)
+        p["snitt_daglig"] = round(sum(total_forandring)/len(total_forandring), 2) if total_forandring else 0
+    conn.close()
+
     html = """<!DOCTYPE html><html>
     <head><title>Trading Dashboard</title><meta charset="utf-8">""" + BASE_STYLE + """
     <style>
@@ -503,10 +521,16 @@ def dashboard():
         .rad:last-child { border-bottom: none; }
         .etikett { color: #999; }
         .detalj-btn { display: block; margin-top: 14px; text-align: center; padding: 7px; background: #0044cc11; color: #0044cc; border-radius: 6px; text-decoration: none; font-size: 0.88em; }
+        .sektion-rubrik { font-size: 0.8em; font-weight: bold; color: #999; text-transform: uppercase; letter-spacing: 0.05em; margin: 24px 0 10px; }
+        .portfolj-kort { background: #fff; border-radius: 10px; padding: 18px; border: 1px solid #ddd; text-decoration: none; color: inherit; display: block; transition: box-shadow 0.15s; }
+        .portfolj-kort:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .niva-badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:0.75em; font-weight:bold; color:#fff; margin-bottom:8px; }
     </style></head>
     <body>""" + NAV_HTML + """
         <h1>Trading Dashboard</h1>
         <p class="uppdaterad">Uppdaterad: {{ uppdaterad }}</p>
+
+        <div class="sektion-rubrik">Marknadsindex</div>
         <div class="grid">
         {% for k in kort %}
             <div class="kort">
@@ -524,8 +548,28 @@ def dashboard():
             </div>
         {% endfor %}
         </div>
+
+        {% if portfoljer %}
+        <div class="sektion-rubrik">Mina portföljer</div>
+        <div class="grid">
+        {% for p in portfoljer %}
+            <a class="portfolj-kort" href="/portfolio/{{ p.id }}">
+                <div class="niva-badge" style="background:{{ niva_farger.get(p.niva, '#888') }};">{{ p.niva }}</div>
+                <div style="font-size:1.1em; font-weight:bold; color:#111; margin-bottom:6px;">{{ p.namn }}</div>
+                <div class="rad"><span class="etikett">Innehav</span><span>{{ p.antal }} st</span></div>
+                <div class="rad"><span class="etikett">Daglig förändring</span>
+                    <span style="color:{{ '#007700' if p.snitt_daglig > 0 else '#cc0000' }}">
+                        {{ "%+.2f"|format(p.snitt_daglig) }}%
+                    </span>
+                </div>
+                <div class="detalj-btn" style="margin-top:12px;">Öppna portfölj</div>
+            </a>
+        {% endfor %}
+        </div>
+        {% endif %}
+
     </body></html>"""
-    return render_template_string(html, kort=kort, uppdaterad=uppdaterad)
+    return render_template_string(html, kort=kort, uppdaterad=uppdaterad, portfoljer=portfoljer, niva_farger=NIVA_FARGER)
 
 
 @app.route("/detalj/<namn>")
