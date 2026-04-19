@@ -46,6 +46,7 @@ platformdirs==4.9.2
 plotly==6.5.2
 proto-plus==1.27.1
 protobuf==6.33.5
+psycopg2-binary==2.9.11
 pyasn1==0.6.2
 pyasn1_modules==0.4.2
 pycparser==3.0
