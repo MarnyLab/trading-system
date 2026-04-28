@@ -43,12 +43,14 @@ DB_PATH = "trading.db"
 def get_conn():
     """Returnerar databasanslutning - Supabase (PostgreSQL) eller SQLite."""
     if DATABASE_URL and psycopg2:
-        conn = psycopg2.connect(DATABASE_URL)
-        return conn, "postgres"
-    else:
-        import sqlite3 as _sqlite3
-        conn = _sqlite3.connect(DB_PATH)
-        return conn, "sqlite"
+        try:
+            conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
+            return conn, "postgres"
+        except Exception as e:
+            print(f"Supabase fel, använder SQLite: {e}")
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect(DB_PATH)
+    return conn, "sqlite"
 
 def q(sql, db_type):
     """Konverterar SQLite ? till PostgreSQL %s."""
@@ -176,11 +178,24 @@ def hamta_gmail_credentials():
     conn.close()
     if not rad or not GMAIL_AVAILABLE:
         return None
-    creds = Credentials.from_authorized_user_info(json.loads(rad[0]), GMAIL_SCOPES)
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        spara_gmail_token(creds)
-    return creds
+    try:
+        creds = Credentials.from_authorized_user_info(json.loads(rad[0]), GMAIL_SCOPES)
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            spara_gmail_token(creds)
+        return creds
+    except Exception as e:
+        print(f"Gmail token fel: {e}")
+        # Ta bort ogiltig token ur databasen
+        try:
+            conn2, db_type2 = get_conn()
+            c2 = conn2.cursor()
+            c2.execute("DELETE FROM gmail_token WHERE id=1")
+            conn2.commit()
+            conn2.close()
+        except:
+            pass
+        return None
 
 def spara_gmail_token(creds):
     conn, db_type = get_conn()
