@@ -94,7 +94,7 @@ def init_db():
         )
     """)
     c.execute(f"""
-        CREATE TABLE IF NOT EXISTS dagliga_analyser (
+        CREATE TABLE IF NOT EXISTS daily_changea_analyser (
             id {serial},
             datum TEXT NOT NULL,
             analys TEXT NOT NULL,
@@ -119,10 +119,10 @@ def init_db():
     c.execute(f"""
         CREATE TABLE IF NOT EXISTS innehav (
             id {serial},
-            portfolj_id INTEGER NOT NULL,
+            portfolio_id INTEGER NOT NULL,
             namn TEXT NOT NULL,
             ticker TEXT NOT NULL,
-            tillgangsslag TEXT NOT NULL,
+            asset_type TEXT NOT NULL,
             valuta TEXT DEFAULT 'SEK',
             skapad TEXT NOT NULL
         )
@@ -130,11 +130,11 @@ def init_db():
     c.execute(f"""
         CREATE TABLE IF NOT EXISTS transaktioner (
             id {serial},
-            innehav_id INTEGER NOT NULL,
+            holding_id INTEGER NOT NULL,
             typ TEXT NOT NULL,
             antal REAL NOT NULL,
             kurs REAL NOT NULL,
-            fx_kurs REAL DEFAULT 1,
+            fx_rate REAL DEFAULT 1,
             datum TEXT NOT NULL,
             notering TEXT,
             skapad TEXT NOT NULL
@@ -143,8 +143,8 @@ def init_db():
     c.execute(f"""
         CREATE TABLE IF NOT EXISTS portfolj_sammanslagning (
             id {serial},
-            total_portfolj_id INTEGER NOT NULL,
-            del_portfolj_id INTEGER NOT NULL
+            total_portfolio_id INTEGER NOT NULL,
+            del_portfolio_id INTEGER NOT NULL
         )
     """)
     c.execute(f"""
@@ -171,7 +171,7 @@ def init_db():
     c.execute(f"""
         CREATE TABLE IF NOT EXISTS portfolj_innehav (
             id {serial},
-            portfolj_id INTEGER NOT NULL,
+            portfolio_id INTEGER NOT NULL,
             ticker TEXT NOT NULL,
             namn TEXT NOT NULL,
             andel REAL NOT NULL,
@@ -453,7 +453,7 @@ NAV_HTML = """
     <a href="/dokument" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Dokument</a>
     <a href="/riskmotor" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Riskmotor</a>
     <a href="/gmail" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Gmail</a>
-    <a href="/daglig-analys" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Daglig Analys</a>
+    <a href="/daily_change-analys" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Daglig Analys</a>
     <a href="/tracker" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Tracker</a>
     <a href="/prisalarm" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Prisalarm</a>
     <a href="/portfolio" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Portfölj</a>
@@ -505,10 +505,10 @@ PORTFOLIO_STYLE = """
         .form-grid-3 { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:12px; }
         .fg label { display:block; color:#666; font-size:0.8em; font-weight:bold; margin-bottom:3px; }
         .fg input, .fg select { width:100%; padding:8px 10px; border:1px solid #ccc; border-radius:5px; font-size:0.9em; }
-        .sök-resultat { background:#fff; border:1px solid #ccc; border-radius:6px; max-height:200px; overflow-y:auto; position:absolute; z-index:100; width:100%; }
-        .sök-rad { padding:8px 12px; cursor:pointer; font-size:0.88em; border-bottom:1px solid #eee; }
-        .sök-rad:hover { background:#f0f4ff; }
-        .sök-wrapper { position:relative; }
+        .search-results { background:#fff; border:1px solid #ccc; border-radius:6px; max-height:200px; overflow-y:auto; position:absolute; z-index:100; width:100%; }
+        .search-row { padding:8px 12px; cursor:pointer; font-size:0.88em; border-bottom:1px solid #eee; }
+        .search-row:hover { background:#f0f4ff; }
+        .search-wrapper { position:relative; }
     </style>
 """
 
@@ -578,34 +578,34 @@ def dashboard():
     portfoljer = []
     for pid, pnamn, pniva in portfoljer_rader:
         # Kolla om sammanslagen
-        c.execute(q("SELECT del_portfolj_id FROM portfolj_sammanslagning WHERE total_portfolj_id=?", db_type), (pid,))
-        del_ids = [r[0] for r in c.fetchall()]
-        search_ids = del_ids if del_ids else [pid]
+        c.execute(q("SELECT del_portfolio_id FROM portfolj_sammanslagning WHERE total_portfolio_id=?", db_type), (pid,))
+        sub_ids = [r[0] for r in c.fetchall()]
+        search_ids = sub_ids if sub_ids else [pid]
         placeholders = ",".join(["%s" if db_type == "postgres" else "?" for _ in search_ids])
         c.execute(f"""SELECT i.ticker, i.valuta,
                    SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) as antal
-                   FROM innehav i LEFT JOIN transaktioner t ON t.innehav_id=i.id
-                   WHERE i.portfolj_id IN ({placeholders})
+                   FROM innehav i LEFT JOIN transaktioner t ON t.holding_id=i.id
+                   WHERE i.portfolio_id IN ({placeholders})
                    GROUP BY i.id, i.ticker, i.valuta
                    HAVING SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) > 0""", search_ids)
         innehav_rader = c.fetchall()
-        tot_mv = 0
-        tot_daglig_vikt = 0
-        tot_vikt = 0
+        total_mv_calc = 0
+        tot_daily_change_vikt = 0
+        total_weight = 0
         for ticker, valuta, antal in innehav_rader:
             if not antal: continue
-            kurs, daglig = hamta_portfolj_kurs(ticker)
+            kurs, daily_change = hamta_portfolj_kurs(ticker)
             if kurs:
                 mv = float(antal) * kurs
-                tot_mv += mv
-                if daglig is not None:
-                    tot_daglig_vikt += daglig * mv
-                    tot_vikt += mv
-        daglig_pct = round(tot_daglig_vikt / tot_vikt, 2) if tot_vikt else 0
+                total_mv_calc += mv
+                if daily_change is not None:
+                    tot_daily_change_vikt += daily_change * mv
+                    total_weight += mv
+        daily_change_pct = round(tot_daily_change_vikt / total_weight, 2) if total_weight else 0
         portfoljer.append({
             "id": pid, "namn": pnamn, "niva": pniva,
-            "antal": len(innehav_rader), "mv": round(tot_mv, 0),
-            "daglig": daglig_pct
+            "antal": len(innehav_rader), "mv": round(total_mv_calc, 0),
+            "daily_change": daily_change_pct
         })
     conn.close()
 
@@ -661,8 +661,8 @@ def dashboard():
                 </div>
                 <div class="rad"><span class="etikett">Innehav</span><span>{{ p.antal }} st</span></div>
                 <div class="rad"><span class="etikett">Idag</span>
-                    <span style="color:{{ '#007700' if p.daglig > 0 else '#cc0000' }}; font-weight:bold;">
-                        {{ "%+.2f"|format(p.daglig) }}%
+                    <span style="color:{{ '#007700' if p.daily_change > 0 else '#cc0000' }}; font-weight:bold;">
+                        {{ "%+.2f"|format(p.daily_change) }}%
                     </span>
                 </div>
                 <div class="detalj-btn" style="margin-top:12px; background:#1F3864; color:#fff; border-radius:6px; padding:7px; text-align:center; font-size:0.88em;">Öppna portfölj →</div>
@@ -1330,16 +1330,16 @@ def gmail_importera(msg_id):
         return f"Fel vid import: {str(e)}", 500
 
 
-@app.route("/cron/daglig-analys")
-def cron_daglig_analys():
+@app.route("/cron/daily_change-analys")
+def cron_daily_change_analys():
     import threading
-    t = threading.Thread(target=kör_daglig_analys)
+    t = threading.Thread(target=kör_daily_change_analys)
     t.daemon = True
     t.start()
     return jsonify({"status": "started", "meddelande": "Daglig analys körs i bakgrunden."})
 
 
-def kör_daglig_analys():
+def kör_daily_change_analys():
     """Körs i bakgrundstråd så att cron-anropet inte timear ut."""
     try:
         # 1. Hämta nya Gmail-mejl
@@ -1384,7 +1384,7 @@ def kör_daglig_analys():
             conn.close()
 
         # 4. Generera analys
-        prompt = "Generera en daglig marknadsanalys för " + datetime.now().strftime("%Y-%m-%d") + ".\n\nMarknadsdata:\n" + marknadsdata + "\n\nNyhetsbrev och analyser:\n" + (dok_kontext if dok_kontext else "Inga nya dokument idag.") + "\n\nNya mejl idag: " + (", ".join(nya_dokument) if nya_dokument else "Inga") + "\n\nGe en strukturerad analys med:\n1. Sammanfattning av marknadsläget\n2. Vad nyhetsbreven säger\n3. Observationer per index\n4. Eventuella köp/säljsignaler"
+        prompt = "Generera en daily_change marknadsanalys för " + datetime.now().strftime("%Y-%m-%d") + ".\n\nMarknadsdata:\n" + marknadsdata + "\n\nNyhetsbrev och analyser:\n" + (dok_kontext if dok_kontext else "Inga nya dokument idag.") + "\n\nNya mejl idag: " + (", ".join(nya_dokument) if nya_dokument else "Inga") + "\n\nGe en strukturerad analys med:\n1. Sammanfattning av marknadsläget\n2. Vad nyhetsbreven säger\n3. Observationer per index\n4. Eventuella köp/säljsignaler"
 
         svar = client.messages.create(
             model="claude-sonnet-4-6",
@@ -1397,7 +1397,7 @@ def kör_daglig_analys():
         # 5. Spara analysen
         conn, db_type = get_conn()
         c = conn.cursor()
-        c.execute(q("INSERT INTO dagliga_analyser (datum, analys, skapad) VALUES (?, ?, ?)", db_type),
+        c.execute(q("INSERT INTO daily_changea_analyser (datum, analys, skapad) VALUES (?, ?, ?)", db_type),
                   (datetime.now().strftime("%Y-%m-%d"), analys_text, datetime.now().strftime("%Y-%m-%d %H:%M")))
         conn.commit()
         conn.close()
@@ -1406,12 +1406,12 @@ def kör_daglig_analys():
         print(f"Cron fel: {str(e)}")
 
 
-@app.route("/daglig-analys")
+@app.route("/daily_change-analys")
 @inloggning_kravs
-def daglig_analys_sida():
+def daily_change_analys_sida():
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute("SELECT id, datum, analys, skapad FROM dagliga_analyser ORDER BY id DESC LIMIT 10")
+    c.execute("SELECT id, datum, analys, skapad FROM daily_changea_analyser ORDER BY id DESC LIMIT 10")
     rader = c.fetchall()
     conn.close()
     analyser = [{"id": r[0], "datum": r[1], "analys": r[2], "skapad": r[3]} for r in rader]
@@ -1434,7 +1434,7 @@ def daglig_analys_sida():
             </div>
             {% endfor %}
         {% else %}
-            <p style="color:#888;">Ingen daglig analys ännu. Aktivera Cron Job på Render för automatisk körning.</p>
+            <p style="color:#888;">Ingen daily_change analys ännu. Aktivera Cron Job på Render för automatisk körning.</p>
         {% endif %}
     </body></html>"""
     return render_template_string(html, analyser=analyser)
@@ -1961,10 +1961,10 @@ def hamta_portfolj_kurs(ticker):
         kurs = float(df["Close"].iloc[-1])
         if len(df) >= 2:
             prev  = float(df["Close"].iloc[-2])
-            daglig = (kurs - prev) / prev * 100
+            daily_change = (kurs - prev) / prev * 100
         else:
-            daglig = 0.0
-        return kurs, daglig
+            daily_change = 0.0
+        return kurs, daily_change
     except:
         return None, None
 
@@ -1977,7 +1977,7 @@ def portfolio_sida():
     c.execute("SELECT id, namn, niva, skapad FROM portfoljer ORDER BY id")
     portfoljer = [{"id": r[0], "namn": r[1], "niva": r[2], "skapad": r[3]} for r in c.fetchall()]
     conn.close()
-    return redirect(url_for("portfolio_vy", portfolj_id=portfoljer[0]["id"])) if portfoljer else redirect(url_for("portfolio_ny_sida"))
+    return redirect(url_for("portfolio_vy", portfolio_id=portfoljer[0]["id"])) if portfoljer else redirect(url_for("portfolio_ny_sida"))
 
 
 @app.route("/portfolio/ny-sida")
@@ -1986,7 +1986,7 @@ def portfolio_ny_sida():
     conn, db_type = get_conn()
     c = conn.cursor()
     c.execute("SELECT id, namn FROM portfoljer ORDER BY id")
-    befintliga = [{"id": r[0], "namn": r[1]} for r in c.fetchall()]
+    existing = [{"id": r[0], "namn": r[1]} for r in c.fetchall()]
     conn.close()
 
     html = """<!DOCTYPE html><html>
@@ -2009,12 +2009,12 @@ def portfolio_ny_sida():
                         <option value="Total">Sammanslagen (välj nedan)</option>
                     </select>
                 </div>
-                {% if befintliga %}
+                {% if existing %}
                 <div class="fg" style="margin-bottom:16px;">
-                    <label>Slå ihop befintliga portföljer (valfritt)</label>
-                    {% for p in befintliga %}
+                    <label>Slå ihop existing portföljer (valfritt)</label>
+                    {% for p in existing %}
                     <div style="margin-top:8px; display:flex; align-items:center; gap:10px;">
-                        <input type="checkbox" name="slå_ihop" value="{{ p.id }}" id="p{{ p.id }}" style="width:18px; height:18px; accent-color:#1F3864;">
+                        <input type="checkbox" name="merge_with" value="{{ p.id }}" id="p{{ p.id }}" style="width:18px; height:18px; accent-color:#1F3864;">
                         <label for="p{{ p.id }}" style="display:inline; font-weight:normal; color:#333; font-size:0.95em;">{{ p.namn }}</label>
                     </div>
                     {% endfor %}
@@ -2024,21 +2024,21 @@ def portfolio_ny_sida():
             </form>
         </div>
     </body></html>"""
-    return render_template_string(html, befintliga=befintliga)
+    return render_template_string(html, existing=existing)
 
 
-@app.route("/portfolio/<int:portfolj_id>")
+@app.route("/portfolio/<int:portfolio_id>")
 @inloggning_kravs
-def portfolio_vy(portfolj_id):
+def portfolio_vy(portfolio_id):
     conn, db_type = get_conn()
     c = conn.cursor()
 
     # Hämta alla portföljer för tabbar
     c.execute("SELECT id, namn, niva FROM portfoljer ORDER BY id")
-    alla_portfoljer = [{"id": r[0], "namn": r[1], "niva": r[2]} for r in c.fetchall()]
+    all_portfolios = [{"id": r[0], "namn": r[1], "niva": r[2]} for r in c.fetchall()]
 
     # Hämta denna portfölj
-    c.execute(q("SELECT id, namn, niva FROM portfoljer WHERE id=?", db_type), (portfolj_id,))
+    c.execute(q("SELECT id, namn, niva FROM portfoljer WHERE id=?", db_type), (portfolio_id,))
     rad = c.fetchone()
     if not rad:
         conn.close()
@@ -2046,68 +2046,68 @@ def portfolio_vy(portfolj_id):
     portfolj = {"id": rad[0], "namn": rad[1], "niva": rad[2]}
 
     # Kolla om detta är en sammanslagen portfölj
-    c.execute(q("SELECT del_portfolj_id FROM portfolj_sammanslagning WHERE total_portfolj_id=?", db_type), (portfolj_id,))
-    del_portfoljer = [r[0] for r in c.fetchall()]
-    är_sammanslagen = len(del_portfoljer) > 0
+    c.execute(q("SELECT del_portfolio_id FROM portfolj_sammanslagning WHERE total_portfolio_id=?", db_type), (portfolio_id,))
+    sub_portfolios = [r[0] for r in c.fetchall()]
+    is_merged = len(sub_portfolios) > 0
 
     # Hämta portfölj-IDs att visa innehav för
-    if är_sammanslagen:
-        portfolj_ids = del_portfoljer
+    if is_merged:
+        portfolio_ids = sub_portfolios
     else:
-        portfolj_ids = [portfolj_id]
+        portfolio_ids = [portfolio_id]
 
     # Hämta innehav
-    placeholders = ",".join(["%s" if db_type == "postgres" else "?" for _ in portfolj_ids])
-    c.execute(f"""SELECT i.id, i.namn, i.ticker, i.tillgangsslag, i.valuta, i.portfolj_id,
+    placeholders = ",".join(["%s" if db_type == "postgres" else "?" for _ in portfolio_ids])
+    c.execute(f"""SELECT i.id, i.namn, i.ticker, i.asset_type, i.valuta, i.portfolio_id,
                SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) as antal,
-               SUM(CASE WHEN t.typ='KOP' THEN t.antal*t.kurs WHEN t.typ='SALJ' THEN -t.antal*t.kurs ELSE 0 END) as anskaffning
+               SUM(CASE WHEN t.typ='KOP' THEN t.antal*t.kurs WHEN t.typ='SALJ' THEN -t.antal*t.kurs ELSE 0 END) as cost_basis
                FROM innehav i
-               LEFT JOIN transaktioner t ON t.innehav_id=i.id
-               WHERE i.portfolj_id IN ({placeholders})
-               GROUP BY i.id, i.namn, i.ticker, i.tillgangsslag, i.valuta, i.portfolj_id
+               LEFT JOIN transaktioner t ON t.holding_id=i.id
+               WHERE i.portfolio_id IN ({placeholders})
+               GROUP BY i.id, i.namn, i.ticker, i.asset_type, i.valuta, i.portfolio_id
                HAVING SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) > 0""",
-               portfolj_ids)
+               portfolio_ids)
     innehav_rader = c.fetchall()
     conn.close()
 
     # Live-kurser och beräkningar
     innehav = []
-    totalt_mv = 0
-    totalt_ansk = 0
-    tillgangsslag_data = {}
-    valuta_data = {}
+    total_mv = 0
+    total_cost = 0
+    asset_type_data = {}
+    currency_data = {}
 
     for r in innehav_rader:
-        iid, namn, ticker, tillgangsslag, valuta, pid, antal, anskaffning = r
+        iid, namn, ticker, asset_type, valuta, pid, antal, cost_basis = r
         antal = float(antal or 0)
-        anskaffning = float(anskaffning or 0)
-        kurs, daglig = hamta_portfolj_kurs(ticker)
+        cost_basis = float(cost_basis or 0)
+        kurs, daily_change = hamta_portfolj_kurs(ticker)
         mv = round(antal * (kurs or 0), 0)
-        orealiserat = round(mv - anskaffning, 0) if mv else 0
-        orealiserat_pct = round(orealiserat / anskaffning * 100, 1) if anskaffning else 0
+        unrealized = round(mv - cost_basis, 0) if mv else 0
+        unrealized_pct = round(unrealized / cost_basis * 100, 1) if cost_basis else 0
 
         innehav.append({
             "id": iid, "namn": namn, "ticker": ticker,
-            "tillgangsslag": tillgangsslag, "valuta": valuta,
+            "asset_type": asset_type, "valuta": valuta,
             "antal": antal, "kurs": kurs or 0,
-            "mv": mv, "anskaffning": round(anskaffning, 0),
-            "orealiserat": orealiserat, "orealiserat_pct": orealiserat_pct,
-            "daglig": daglig or 0, "portfolj_id": pid
+            "mv": mv, "cost_basis": round(cost_basis, 0),
+            "unrealized": unrealized, "unrealized_pct": unrealized_pct,
+            "daily_change": daily_change or 0, "portfolio_id": pid
         })
-        totalt_mv += mv
-        totalt_ansk += anskaffning
-        tillgangsslag_data[tillgangsslag] = tillgangsslag_data.get(tillgangsslag, 0) + mv
-        valuta_data[valuta] = valuta_data.get(valuta, 0) + mv
+        total_mv += mv
+        total_cost += cost_basis
+        asset_type_data[asset_type] = asset_type_data.get(asset_type, 0) + mv
+        currency_data[valuta] = currency_data.get(valuta, 0) + mv
 
-    totalt_orealiserat = totalt_mv - totalt_ansk
-    totalt_pct = round(totalt_orealiserat / totalt_ansk * 100, 1) if totalt_ansk else 0
+    totalt_unrealized = total_mv - total_cost
+    total_pct = round(totalt_unrealized / total_cost * 100, 1) if total_cost else 0
     innehav.sort(key=lambda x: x["mv"], reverse=True)
 
     import json as _json
-    tillgangsslag_json = _json.dumps(list(tillgangsslag_data.keys()))
-    tillgangsslag_values = _json.dumps([round(v) for v in tillgangsslag_data.values()])
-    valuta_json = _json.dumps(list(valuta_data.keys()))
-    valuta_values = _json.dumps([round(v) for v in valuta_data.values()])
+    asset_type_json = _json.dumps(list(asset_type_data.keys()))
+    asset_type_values = _json.dumps([round(v) for v in asset_type_data.values()])
+    currency_json = _json.dumps(list(currency_data.keys()))
+    currency_values = _json.dumps([round(v) for v in currency_data.values()])
 
     html = """<!DOCTYPE html><html>
     <head><title>{{ portfolj.namn }}</title><meta charset="utf-8">
@@ -2129,21 +2129,21 @@ def portfolio_vy(portfolj_id):
         </div>
 
         <div class="portfolj-tabs">
-        {% for p in alla_portfoljer %}
+        {% for p in all_portfolios %}
             <a href="/portfolio/{{ p.id }}" class="portfolj-tab {{ 'aktiv' if p.id == portfolj.id else '' }}">{{ p.namn }}</a>
         {% endfor %}
         </div>
 
         <div class="kpi-rad">
-            <div class="kpi-box"><div class="etikett">Marknadsvärde</div><div class="varde">{{ "{:,.0f}".format(totalt_mv).replace(",", " ") }} SEK</div></div>
-            <div class="kpi-box"><div class="etikett">Anskaffningsvärde</div><div class="varde">{{ "{:,.0f}".format(totalt_ansk).replace(",", " ") }} SEK</div></div>
+            <div class="kpi-box"><div class="etikett">Marknadsvärde</div><div class="varde">{{ "{:,.0f}".format(total_mv).replace(",", " ") }} SEK</div></div>
+            <div class="kpi-box"><div class="etikett">Anskaffningsvärde</div><div class="varde">{{ "{:,.0f}".format(total_cost).replace(",", " ") }} SEK</div></div>
             <div class="kpi-box">
                 <div class="etikett">Orealiserat</div>
-                <div class="varde {{ 'pos' if totalt_orealiserat > 0 else 'neg' }}">{{ "{:,.0f}".format(totalt_orealiserat).replace(",", " ") }} SEK</div>
+                <div class="varde {{ 'pos' if totalt_unrealized > 0 else 'neg' }}">{{ "{:,.0f}".format(totalt_unrealized).replace(",", " ") }} SEK</div>
             </div>
             <div class="kpi-box">
                 <div class="etikett">Avkastning</div>
-                <div class="varde {{ 'pos' if totalt_pct > 0 else 'neg' }}">{{ "%+.1f"|format(totalt_pct) }}%</div>
+                <div class="varde {{ 'pos' if total_pct > 0 else 'neg' }}">{{ "%+.1f"|format(total_pct) }}%</div>
             </div>
         </div>
 
@@ -2160,7 +2160,7 @@ def portfolio_vy(portfolj_id):
 
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
             <div class="tb-header" style="border-radius:8px; flex:1;">Innehav ({{ innehav|length }} st)</div>
-            {% if not är_sammanslagen %}
+            {% if not is_merged %}
             <button onclick="document.getElementById('modal-lagg-till').classList.add('visa')"
                 style="margin-left:12px; padding:8px 18px; background:#1F3864; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:0.88em;">
                 + Lägg till
@@ -2179,16 +2179,16 @@ def portfolio_vy(portfolj_id):
             <tr>
                 <td><a href="/portfolio/innehav/{{ h.id }}" style="color:#1F3864; font-weight:bold; text-decoration:none;">{{ h.namn }}</a>
                     <br><span style="color:#999; font-size:0.78em;">{{ h.ticker }}</span></td>
-                <td><span class="badge-typ">{{ h.tillgangsslag[:10] }}</span></td>
+                <td><span class="badge-typ">{{ h.asset_type[:10] }}</span></td>
                 <td>{{ "%.2f"|format(h.antal) }}</td>
                 <td>{{ "%.2f"|format(h.kurs) }}</td>
                 <td>{{ "{:,.0f}".format(h.mv).replace(",", " ") }}</td>
-                <td>{{ "{:,.0f}".format(h.anskaffning).replace(",", " ") }}</td>
-                <td class="{{ 'pos' if h.orealiserat > 0 else 'neg' }}">{{ "{:,.0f}".format(h.orealiserat).replace(",", " ") }}</td>
-                <td class="{{ 'pos' if h.orealiserat_pct > 0 else 'neg' }}">{{ "%+.1f"|format(h.orealiserat_pct) }}%</td>
-                <td class="{{ 'pos' if h.daglig > 0 else 'neg' }}">{{ "%+.1f"|format(h.daglig) }}%</td>
+                <td>{{ "{:,.0f}".format(h.cost_basis).replace(",", " ") }}</td>
+                <td class="{{ 'pos' if h.unrealized > 0 else 'neg' }}">{{ "{:,.0f}".format(h.unrealized).replace(",", " ") }}</td>
+                <td class="{{ 'pos' if h.unrealized_pct > 0 else 'neg' }}">{{ "%+.1f"|format(h.unrealized_pct) }}%</td>
+                <td class="{{ 'pos' if h.daily_change > 0 else 'neg' }}">{{ "%+.1f"|format(h.daily_change) }}%</td>
                 <td style="white-space:nowrap;">
-                    <button onclick="öppnaSälj({{ h.id }}, '{{ h.namn }}', {{ h.antal }})"
+                    <button onclick="openSellModal({{ h.id }}, '{{ h.namn }}', {{ h.antal }})"
                         style="padding:3px 8px; background:#888; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:0.78em; margin-right:4px;">Sälj</button>
                     <form method="POST" action="/portfolio/innehav/{{ h.id }}/ta-bort" style="display:inline;"
                         onsubmit="return confirm('Ta bort {{ h.namn }}?')">
@@ -2200,7 +2200,7 @@ def portfolio_vy(portfolj_id):
             </tbody>
         </table>
 
-        {% if not är_sammanslagen %}
+        {% if not is_merged %}
         <div style="margin-bottom:24px;">
             <div class="tb-header" style="border-radius:8px 8px 0 0;">Importera från Excel</div>
             <div style="background:#fff; padding:16px; border-radius:0 0 8px 8px; border:1px solid #eee;">
@@ -2219,18 +2219,18 @@ def portfolio_vy(portfolj_id):
         <div id="modal-lagg-till" class="modal" onclick="if(event.target===this)this.classList.remove('visa')">
             <div class="modal-box">
                 <h3>+ Lägg till innehav</h3>
-                <div class="sök-wrapper" style="margin-bottom:12px;">
+                <div class="search-wrapper" style="margin-bottom:12px;">
                     <label style="display:block; color:#666; font-size:0.8em; font-weight:bold; margin-bottom:3px;">Sök värdepapper</label>
-                    <input type="text" id="sök-input" placeholder="t.ex. Investor, AAPL, SPY..." autocomplete="off"
+                    <input type="text" id="search-input" placeholder="t.ex. Investor, AAPL, SPY..." autocomplete="off"
                         style="width:100%; padding:9px 12px; border:1px solid #ccc; border-radius:6px; font-size:0.95em;">
-                    <div id="sök-resultat" class="sök-resultat"></div>
+                    <div id="search-results" class="search-results"></div>
                 </div>
                 <form method="POST" action="/portfolio/{{ portfolj.id }}/lagg-till">
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
                         <div class="fg"><label>Namn</label><input type="text" name="namn" id="f-namn" required></div>
                         <div class="fg"><label>Yahoo Ticker</label><input type="text" name="ticker" id="f-ticker" required></div>
                         <div class="fg"><label>Typ</label>
-                            <select name="tillgangsslag" id="f-typ">
+                            <select name="asset_type" id="f-typ">
                                 <option>Aktie</option><option>ETF</option><option>Fond</option>
                                 <option>Råvara</option><option>Obligation</option><option>Kassa</option>
                             </select>
@@ -2279,54 +2279,54 @@ def portfolio_vy(portfolj_id):
         // Donut 1 - Tillgångsslag
         new Chart(document.getElementById('donut1').getContext('2d'), {
             type: 'doughnut',
-            data: { labels: {{ tillgangsslag_json|safe }}, datasets: [{ data: {{ tillgangsslag_values|safe }},
+            data: { labels: {{ asset_type_json|safe }}, datasets: [{ data: {{ asset_type_values|safe }},
                 backgroundColor: ['#1F3864','#2E5FA3','#4472C4','#9DC3E6','#D9E2F3','#A9C4E4','#6FA8DC','#3D6FA6'] }] },
             options: { plugins: { legend: { position: 'bottom', labels: { font: { size: 10 } } } }, cutout: '60%' }
         });
         // Donut 2 - Valuta
         new Chart(document.getElementById('donut2').getContext('2d'), {
             type: 'doughnut',
-            data: { labels: {{ valuta_json|safe }}, datasets: [{ data: {{ valuta_values|safe }},
+            data: { labels: {{ currency_json|safe }}, datasets: [{ data: {{ currency_values|safe }},
                 backgroundColor: ['#1F3864','#4472C4','#9DC3E6','#D9E2F3','#6FA8DC'] }] },
             options: { plugins: { legend: { position: 'bottom', labels: { font: { size: 10 } } } }, cutout: '60%' }
         });
 
         // Sök
-        let sökTimer;
-        document.getElementById('sök-input').addEventListener('input', function() {
-            clearTimeout(sökTimer);
-            const q = this.value.trim();
-            const div = document.getElementById('sök-resultat');
-            if (q.length < 2) { div.innerHTML=''; return; }
-            sökTimer = setTimeout(() => {
-                fetch('/portfolio/sök-ticker?q=' + encodeURIComponent(q))
+        let searchTimer;
+        document.getElementById('search-input').addEventListener('input', function() {
+            clearTimeout(searchTimer);
+            const searchQ = this.value.trim();
+            const div = document.getElementById('search-results');
+            if (searchQ.length < 2) { div.innerHTML=''; return; }
+            searchTimer = setTimeout(() => {
+                fetch('/portfolio/sok-ticker?q=' + encodeURIComponent(searchQ))
                     .then(r => r.json())
                     .then(data => {
-                        if (!data.length) { div.innerHTML='<div class="sök-rad" style="color:#888;">Inga träffar</div>'; return; }
+                        if (!data.length) { div.innerHTML='<div class="search-row" style="color:#888;">Inga träffar</div>'; return; }
                         div.innerHTML = data.map(d => {
                             const t = d.ticker.replace(/"/g,'&quot;');
                             const n = d.namn.replace(/"/g,'&quot;');
-                            return '<div class="sök-rad" onclick=\'välj("' + t + '","' + n + '","' + d.typ + '")\'>'+
+                            return '<div class="search-row" onclick=\'välj("' + t + '","' + n + '","' + d.typ + '")\'>'+
                             '<strong>' + d.ticker + '</strong> – ' + d.namn +
                             ' <span style="color:#888;font-size:0.8em;">(' + d.typ + ')</span></div>';
                         }).join('');
             }, 350);
         });
-        function välj(ticker, namn, typ) {
+        function selectTicker(ticker, namn, typ) {
             document.getElementById('f-ticker').value = ticker;
             document.getElementById('f-namn').value = namn;
-            document.getElementById('sök-input').value = namn + ' (' + ticker + ')';
-            document.getElementById('sök-resultat').innerHTML = '';
+            document.getElementById('search-input').value = namn + ' (' + ticker + ')';
+            document.getElementById('search-results').innerHTML = '';
             const typMap = {'EQUITY':'Aktie','ETF':'ETF','MUTUALFUND':'Fond','COMMODITY':'Råvara'};
             const sel = document.getElementById('f-typ');
             for(let o of sel.options) { if(o.value === (typMap[typ] || 'Aktie')) { o.selected=true; break; } }
         }
         document.addEventListener('click', function(e) {
-            if (!e.target.closest('.sök-wrapper')) document.getElementById('sök-resultat').innerHTML='';
+            if (!e.target.closest('.search-wrapper')) document.getElementById('search-results').innerHTML='';
         });
 
         // Sälj modal
-        function öppnaSälj(id, namn, maxAntal) {
+        function openSellModal(id, namn, maxAntal) {
             document.getElementById('salj-titel').textContent = 'Sälj – ' + namn;
             document.getElementById('salj-form').action = '/portfolio/innehav/' + id + '/transaktion';
             document.getElementById('salj-antal').max = maxAntal;
@@ -2336,12 +2336,12 @@ def portfolio_vy(portfolj_id):
     </body></html>"""
 
     today = datetime.now().strftime("%Y-%m-%d")
-    return render_template_string(html, portfolj=portfolj, alla_portfoljer=alla_portfoljer,
-                                  innehav=innehav, totalt_mv=totalt_mv, totalt_ansk=totalt_ansk,
-                                  totalt_orealiserat=totalt_orealiserat, totalt_pct=totalt_pct,
-                                  tillgangsslag_json=tillgangsslag_json, tillgangsslag_values=tillgangsslag_values,
-                                  valuta_json=valuta_json, valuta_values=valuta_values,
-                                  är_sammanslagen=är_sammanslagen, today=today)
+    return render_template_string(html, portfolj=portfolj, all_portfolios=all_portfolios,
+                                  innehav=innehav, total_mv=total_mv, total_cost=total_cost,
+                                  totalt_unrealized=totalt_unrealized, total_pct=total_pct,
+                                  asset_type_json=asset_type_json, asset_type_values=asset_type_values,
+                                  currency_json=currency_json, currency_values=currency_values,
+                                  is_merged=is_merged, today=today)
 
 
 @app.route("/portfolio/ny", methods=["POST"])
@@ -2349,7 +2349,7 @@ def portfolio_vy(portfolj_id):
 def portfolio_ny():
     namn = request.form.get("namn", "").strip()
     niva = request.form.get("niva", "Depå")
-    slå_ihop = request.form.getlist("slå_ihop")
+    merge_with = request.form.getlist("merge_with")
     if not namn:
         return redirect(url_for("portfolio_ny_sida"))
     conn, db_type = get_conn()
@@ -2360,40 +2360,40 @@ def portfolio_ny():
         c.execute("SELECT lastval()")
     else:
         c.execute("SELECT last_insert_rowid()")
-    ny_id = c.fetchone()[0]
+    new_id = c.fetchone()[0]
     # Spara sammanslagningar
-    for del_id in slå_ihop:
-        c.execute(q("INSERT INTO portfolj_sammanslagning (total_portfolj_id, del_portfolj_id) VALUES (?,?)", db_type),
-                  (ny_id, int(del_id)))
+    for del_id in merge_with:
+        c.execute(q("INSERT INTO portfolj_sammanslagning (total_portfolio_id, del_portfolio_id) VALUES (?,?)", db_type),
+                  (new_id, int(del_id)))
     conn.commit()
     conn.close()
-    return redirect(url_for("portfolio_vy", portfolj_id=ny_id))
+    return redirect(url_for("portfolio_vy", portfolio_id=new_id))
 
 
-@app.route("/portfolio/<int:portfolj_id>")
+@app.route("/portfolio/<int:portfolio_id>")
 @inloggning_kravs
-def portfolio_detalj(portfolj_id):
+def portfolio_detalj(portfolio_id):
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute(q("SELECT namn, niva, skapad FROM portfoljer WHERE id=?", db_type), (portfolj_id,))
+    c.execute(q("SELECT namn, niva, skapad FROM portfoljer WHERE id=?", db_type), (portfolio_id,))
     prad = c.fetchone()
     if not prad:
         conn.close()
         return "Portfölj hittades inte", 404
-    c.execute(q("SELECT id, ticker, namn, andel FROM portfolj_innehav WHERE portfolj_id=? ORDER BY andel DESC", db_type), (portfolj_id,))
+    c.execute(q("SELECT id, ticker, namn, andel FROM portfolj_innehav WHERE portfolio_id=? ORDER BY andel DESC", db_type), (portfolio_id,))
     hrader = c.fetchall()
     conn.close()
 
     innehav = []
-    total_daglig = 0.0
+    total_daily_change = 0.0
     total_andel  = sum(r[3] for r in hrader)
     for hid, ticker, namn_h, andel in hrader:
-        kurs, daglig = hamta_portfolj_kurs(ticker)
+        kurs, daily_change = hamta_portfolj_kurs(ticker)
         vikt = andel / total_andel if total_andel else 0
-        if daglig is not None:
-            total_daglig += daglig * vikt
+        if daily_change is not None:
+            total_daily_change += daily_change * vikt
         innehav.append({"id": hid, "ticker": ticker, "namn": namn_h,
-                         "andel": andel, "kurs": kurs, "daglig": daglig})
+                         "andel": andel, "kurs": kurs, "daily_change": daily_change})
 
     portfolj_namn, niva, skapad = prad
     farv = NIVA_FARGER.get(niva, "#888")
@@ -2420,7 +2420,7 @@ def portfolio_detalj(portfolj_id):
     <style>
         .niva-badge { display:inline-block; padding:3px 12px; border-radius:12px; font-size:0.82em; font-weight:bold; color:#fff; }
         .top-info { display:flex; gap:16px; align-items:center; margin-bottom:24px; flex-wrap:wrap; }
-        .daglig-total { font-size:1.6em; font-weight:bold; }
+        .daily_change-total { font-size:1.6em; font-weight:bold; }
         .innehav-form { background:#fff; border-radius:10px; padding:20px; border:1px solid #ddd; max-width:560px; margin-bottom:24px; }
         .fg { margin-bottom:12px; }
         .fg label { display:block; color:#888; font-size:0.82em; font-weight:bold; margin-bottom:4px; }
@@ -2439,8 +2439,8 @@ def portfolio_detalj(portfolj_id):
             {% if innehav %}
             <div style="margin-left:auto; text-align:right;">
                 <div style="color:#888; font-size:0.82em;">Daglig portföljförändring (vägd)</div>
-                <div class="daglig-total" style="color:{{ '#007700' if total_daglig >= 0 else '#cc0000' }}">
-                    {{ "%+.2f"|format(total_daglig) }}%
+                <div class="daily_change-total" style="color:{{ '#007700' if total_daily_change >= 0 else '#cc0000' }}">
+                    {{ "%+.2f"|format(total_daily_change) }}%
                 </div>
             </div>
             {% endif %}
@@ -2469,8 +2469,8 @@ def portfolio_detalj(portfolj_id):
                         <td>{{ h.namn }}</td>
                         <td>{{ "%.1f"|format(h.andel) }}%</td>
                         <td>{% if h.kurs %}{{ "%.2f"|format(h.kurs) }}{% else %}<span style="color:#aaa;">–</span>{% endif %}</td>
-                        <td>{% if h.daglig is not none %}
-                            <span style="color:{{ '#007700' if h.daglig >= 0 else '#cc0000' }}">{{ "%+.2f"|format(h.daglig) }}%</span>
+                        <td>{% if h.daily_change is not none %}
+                            <span style="color:{{ '#007700' if h.daily_change >= 0 else '#cc0000' }}">{{ "%+.2f"|format(h.daily_change) }}%</span>
                             {% else %}<span style="color:#aaa;">–</span>{% endif %}
                         </td>
                         <td>
@@ -2502,40 +2502,40 @@ def portfolio_detalj(portfolj_id):
         </div>
     </body></html>"""
     return render_template_string(html, pnamn=portfolj_namn, niva=niva, farv=farv,
-                                  pid=portfolj_id, innehav=innehav,
-                                  total_daglig=total_daglig, pie_html=pie_html)
+                                  pid=portfolio_id, innehav=innehav,
+                                  total_daily_change=total_daily_change, pie_html=pie_html)
 
 
 
 
 
-@app.route("/portfolio/<int:portfolj_id>/ta-bort/<int:innehav_id>", methods=["POST"])
+@app.route("/portfolio/<int:portfolio_id>/ta-bort/<int:holding_id>", methods=["POST"])
 @inloggning_kravs
-def portfolio_ta_bort_innehav(portfolj_id, innehav_id):
+def portfolio_ta_bort_innehav(portfolio_id, holding_id):
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute(q("DELETE FROM portfolj_innehav WHERE id=? AND portfolj_id=?", db_type), (innehav_id, portfolj_id))
+    c.execute(q("DELETE FROM portfolj_innehav WHERE id=? AND portfolio_id=?", db_type), (holding_id, portfolio_id))
     conn.commit()
     conn.close()
-    return redirect(url_for("portfolio_detalj", portfolj_id=portfolj_id))
+    return redirect(url_for("portfolio_detalj", portfolio_id=portfolio_id))
 
 
-@app.route("/portfolio/<int:portfolj_id>/ta-bort-portfolj", methods=["POST"])
+@app.route("/portfolio/<int:portfolio_id>/ta-bort-portfolj", methods=["POST"])
 @inloggning_kravs
-def portfolio_ta_bort(portfolj_id):
+def portfolio_ta_bort(portfolio_id):
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute(q("DELETE FROM portfolj_innehav WHERE portfolj_id=?", db_type), (portfolj_id,))
-    c.execute(q("DELETE FROM portfoljer WHERE id=?", db_type), (portfolj_id,))
+    c.execute(q("DELETE FROM portfolj_innehav WHERE portfolio_id=?", db_type), (portfolio_id,))
+    c.execute(q("DELETE FROM portfoljer WHERE id=?", db_type), (portfolio_id,))
     conn.commit()
     conn.close()
     return redirect(url_for("portfolio_sida"))
 
 
 
-@app.route("/portfolio/sök-ticker")
+@app.route("/portfolio/sok-ticker")
 @inloggning_kravs
-def portfolio_sök_ticker():
+def portfolio_sok_ticker():
     q_str = request.args.get("q", "").strip()
     if len(q_str) < 2:
         return jsonify([])
@@ -2558,12 +2558,12 @@ def portfolio_sök_ticker():
         return jsonify([])
 
 
-@app.route("/portfolio/<int:portfolj_id>/lagg-till", methods=["POST"])
+@app.route("/portfolio/<int:portfolio_id>/lagg-till", methods=["POST"])
 @inloggning_kravs
-def portfolio_lagg_till(portfolj_id):
+def portfolio_lagg_till(portfolio_id):
     namn        = request.form.get("namn", "").strip()
     ticker      = request.form.get("ticker", "").strip().upper()
-    tillgangsslag = request.form.get("tillgangsslag", "Aktie")
+    asset_type = request.form.get("asset_type", "Aktie")
     valuta      = request.form.get("valuta", "SEK")
     antal       = float(request.form.get("antal", 0))
     kurs        = float(request.form.get("kurs", 0))
@@ -2574,40 +2574,40 @@ def portfolio_lagg_till(portfolj_id):
     c = conn.cursor()
 
     # Kolla om ticker redan finns i portföljen
-    c.execute(q("SELECT id FROM innehav WHERE portfolj_id=? AND ticker=?", db_type), (portfolj_id, ticker))
-    befintligt = c.fetchone()
+    c.execute(q("SELECT id FROM innehav WHERE portfolio_id=? AND ticker=?", db_type), (portfolio_id, ticker))
+    existing_holding = c.fetchone()
 
-    if befintligt:
-        innehav_id = befintligt[0]
+    if existing_holding:
+        holding_id = existing_holding[0]
     else:
-        c.execute(q("INSERT INTO innehav (portfolj_id, namn, ticker, tillgangsslag, valuta, skapad) VALUES (?,?,?,?,?,?)", db_type),
-                  (portfolj_id, namn, ticker, tillgangsslag, valuta, datetime.now().strftime("%Y-%m-%d %H:%M")))
+        c.execute(q("INSERT INTO innehav (portfolio_id, namn, ticker, asset_type, valuta, skapad) VALUES (?,?,?,?,?,?)", db_type),
+                  (portfolio_id, namn, ticker, asset_type, valuta, datetime.now().strftime("%Y-%m-%d %H:%M")))
         if db_type == "postgres":
             c.execute("SELECT lastval()")
         else:
             c.execute("SELECT last_insert_rowid()")
-        innehav_id = c.fetchone()[0]
+        holding_id = c.fetchone()[0]
 
-    c.execute(q("INSERT INTO transaktioner (innehav_id, typ, antal, kurs, datum, notering, skapad) VALUES (?,?,?,?,?,?,?)", db_type),
-              (innehav_id, "KOP", antal, kurs, datum, notering, datetime.now().strftime("%Y-%m-%d %H:%M")))
+    c.execute(q("INSERT INTO transaktioner (holding_id, typ, antal, kurs, datum, notering, skapad) VALUES (?,?,?,?,?,?,?)", db_type),
+              (holding_id, "KOP", antal, kurs, datum, notering, datetime.now().strftime("%Y-%m-%d %H:%M")))
     conn.commit()
     conn.close()
-    return redirect(url_for("portfolio_vy", portfolj_id=portfolj_id))
+    return redirect(url_for("portfolio_vy", portfolio_id=portfolio_id))
 
 
-@app.route("/portfolio/innehav/<int:innehav_id>")
+@app.route("/portfolio/innehav/<int:holding_id>")
 @inloggning_kravs
-def portfolio_innehav_detalj(innehav_id):
+def portfolio_innehav_detalj(holding_id):
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute(q("SELECT i.id, i.namn, i.ticker, i.tillgangsslag, i.valuta, i.portfolj_id FROM innehav i WHERE i.id=?", db_type), (innehav_id,))
+    c.execute(q("SELECT i.id, i.namn, i.ticker, i.asset_type, i.valuta, i.portfolio_id FROM innehav i WHERE i.id=?", db_type), (holding_id,))
     rad = c.fetchone()
     if not rad:
         conn.close()
         return redirect(url_for("portfolio_sida"))
-    iid, namn, ticker, tillgangsslag, valuta, portfolj_id = rad
+    iid, namn, ticker, asset_type, valuta, portfolio_id = rad
 
-    c.execute(q("SELECT typ, antal, kurs, datum, notering FROM transaktioner WHERE innehav_id=? ORDER BY datum", db_type), (innehav_id,))
+    c.execute(q("SELECT typ, antal, kurs, datum, notering FROM transaktioner WHERE holding_id=? ORDER BY datum", db_type), (holding_id,))
     transaktioner = [{"typ": r[0], "antal": r[1], "kurs": r[2], "datum": r[3], "notering": r[4]} for r in c.fetchall()]
     conn.close()
 
@@ -2622,13 +2622,13 @@ def portfolio_innehav_detalj(innehav_id):
         # Beräkna snittköpkurs
         tot_antal = sum(t["antal"] if t["typ"]=="KOP" else -t["antal"] for t in transaktioner)
         tot_kost = sum(t["antal"]*t["kurs"] if t["typ"]=="KOP" else -t["antal"]*t["kurs"] for t in transaktioner)
-        snitt_kurs = tot_kost / tot_antal if tot_antal else 0
+        avg_price = tot_kost / tot_antal if tot_antal else 0
         mv = round(tot_antal * kurs_nu, 0)
-        orealiserat = round(mv - tot_kost, 0)
-        orealiserat_pct = round(orealiserat / tot_kost * 100, 1) if tot_kost else 0
+        unrealized = round(mv - tot_kost, 0)
+        unrealized_pct = round(unrealized / tot_kost * 100, 1) if tot_kost else 0
     except Exception as e:
-        kurs_nu = 0; x_labels = []; kurs_data = []; snitt_kurs = 0
-        mv = 0; orealiserat = 0; orealiserat_pct = 0; tot_antal = 0; tot_kost = 0
+        kurs_nu = 0; x_labels = []; kurs_data = []; avg_price = 0
+        mv = 0; unrealized = 0; unrealized_pct = 0; tot_antal = 0; tot_kost = 0
 
     import json as _json
     html = """<!DOCTYPE html><html>
@@ -2636,16 +2636,16 @@ def portfolio_innehav_detalj(innehav_id):
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>""" + BASE_STYLE + PORTFOLIO_STYLE + """
     </head><body>""" + NAV_HTML + """
         <div style="margin-bottom:14px;">
-            <a href="/portfolio/{{ portfolj_id }}" style="color:#1F3864; font-size:0.88em;">← Tillbaka till portfölj</a>
+            <a href="/portfolio/{{ portfolio_id }}" style="color:#1F3864; font-size:0.88em;">← Tillbaka till portfölj</a>
         </div>
         <h1>{{ namn }} <span style="color:#888; font-size:0.7em; font-weight:normal;">{{ ticker }}</span></h1>
         <div class="kpi-rad" style="margin-top:14px;">
             <div class="kpi-box"><div class="etikett">Aktuell kurs</div><div class="varde">{{ "%.2f"|format(kurs_nu) }} {{ valuta }}</div></div>
             <div class="kpi-box"><div class="etikett">Antal</div><div class="varde">{{ "%.3f"|format(tot_antal) }}</div></div>
-            <div class="kpi-box"><div class="etikett">Snittköpkurs</div><div class="varde">{{ "%.2f"|format(snitt_kurs) }}</div></div>
+            <div class="kpi-box"><div class="etikett">Snittköpkurs</div><div class="varde">{{ "%.2f"|format(avg_price) }}</div></div>
             <div class="kpi-box"><div class="etikett">Marknadsvärde</div><div class="varde">{{ "{:,.0f}".format(mv).replace(",", " ") }}</div></div>
             <div class="kpi-box"><div class="etikett">Orealiserat</div>
-                <div class="varde {{ 'pos' if orealiserat > 0 else 'neg' }}">{{ "{:,.0f}".format(orealiserat).replace(",", " ") }} ({{ "%+.1f"|format(orealiserat_pct) }}%)</div>
+                <div class="varde {{ 'pos' if unrealized > 0 else 'neg' }}">{{ "{:,.0f}".format(unrealized).replace(",", " ") }} ({{ "%+.1f"|format(unrealized_pct) }}%)</div>
             </div>
         </div>
 
@@ -2683,8 +2683,8 @@ def portfolio_innehav_detalj(innehav_id):
                     borderColor: '#1F3864', backgroundColor: 'rgba(31,56,100,0.07)',
                     borderWidth: 2, pointRadius: 0, fill: true, tension: 0.3
                 }, {
-                    label: 'Snittköpkurs {{ "%.2f"|format(snitt_kurs) }}',
-                    data: Array({{ x_labels_json|safe }}.length).fill({{ snitt_kurs }}),
+                    label: 'Snittköpkurs {{ "%.2f"|format(avg_price) }}',
+                    data: Array({{ x_labels_json|safe }}.length).fill({{ avg_price }}),
                     borderColor: '#cc6600', borderWidth: 1.5, borderDash: [5,5],
                     pointRadius: 0, fill: false
                 }]
@@ -2698,33 +2698,33 @@ def portfolio_innehav_detalj(innehav_id):
     </body></html>"""
 
     return render_template_string(html,
-        namn=namn, ticker=ticker, valuta=valuta, portfolj_id=portfolj_id,
-        kurs_nu=kurs_nu, tot_antal=tot_antal, snitt_kurs=snitt_kurs,
-        mv=mv, orealiserat=orealiserat, orealiserat_pct=orealiserat_pct,
+        namn=namn, ticker=ticker, valuta=valuta, portfolio_id=portfolio_id,
+        kurs_nu=kurs_nu, tot_antal=tot_antal, avg_price=avg_price,
+        mv=mv, unrealized=unrealized, unrealized_pct=unrealized_pct,
         transaktioner=transaktioner,
         x_labels_json=_json.dumps(x_labels),
         kurs_data_json=_json.dumps(kurs_data))
 
 
 
-@app.route("/portfolio/innehav/<int:innehav_id>/ta-bort", methods=["POST"])
+@app.route("/portfolio/innehav/<int:holding_id>/ta-bort", methods=["POST"])
 @inloggning_kravs
-def innehav_ta_bort(innehav_id):
+def innehav_ta_bort(holding_id):
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute(q("SELECT portfolj_id FROM innehav WHERE id=?", db_type), (innehav_id,))
+    c.execute(q("SELECT portfolio_id FROM innehav WHERE id=?", db_type), (holding_id,))
     rad = c.fetchone()
-    portfolj_id = rad[0] if rad else 1
-    c.execute(q("DELETE FROM transaktioner WHERE innehav_id=?", db_type), (innehav_id,))
-    c.execute(q("DELETE FROM innehav WHERE id=?", db_type), (innehav_id,))
+    portfolio_id = rad[0] if rad else 1
+    c.execute(q("DELETE FROM transaktioner WHERE holding_id=?", db_type), (holding_id,))
+    c.execute(q("DELETE FROM innehav WHERE id=?", db_type), (holding_id,))
     conn.commit()
     conn.close()
-    return redirect(url_for("portfolio_vy", portfolj_id=portfolj_id))
+    return redirect(url_for("portfolio_vy", portfolio_id=portfolio_id))
 
 
-@app.route("/portfolio/innehav/<int:innehav_id>/transaktion", methods=["POST"])
+@app.route("/portfolio/innehav/<int:holding_id>/transaktion", methods=["POST"])
 @inloggning_kravs
-def innehav_transaktion(innehav_id):
+def innehav_transaktion(holding_id):
     """Registrerar köp eller försäljning."""
     typ    = request.form.get("typ", "KOP")
     antal  = float(request.form.get("antal", 0))
@@ -2734,47 +2734,47 @@ def innehav_transaktion(innehav_id):
 
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute(q("SELECT portfolj_id, valuta FROM innehav WHERE id=?", db_type), (innehav_id,))
+    c.execute(q("SELECT portfolio_id, valuta FROM innehav WHERE id=?", db_type), (holding_id,))
     rad = c.fetchone()
-    portfolj_id = rad[0] if rad else 1
+    portfolio_id = rad[0] if rad else 1
     valuta = rad[1] if rad else "SEK"
 
     # Hämta FX-kurs automatiskt om inte SEK
-    fx_kurs = 1.0
+    fx_rate = 1.0
     if valuta != "SEK":
         try:
             fx_ticker = {"USD": "USDSEK=X", "EUR": "EURSEK=X", "DKK": "DKKSEK=X", "NOK": "NOKSEK=X"}.get(valuta)
             if fx_ticker:
                 fx_df = yf.download(fx_ticker, start=datum, end=datum, progress=False, auto_adjust=True)
                 if not fx_df.empty:
-                    fx_kurs = float(fx_df["Close"].iloc[0])
+                    fx_rate = float(fx_df["Close"].iloc[0])
         except:
             pass
 
-    c.execute(q("INSERT INTO transaktioner (innehav_id, typ, antal, kurs, fx_kurs, datum, notering, skapad) VALUES (?,?,?,?,?,?,?,?)", db_type),
-              (innehav_id, typ, antal, kurs, fx_kurs, datum, notering, datetime.now().strftime("%Y-%m-%d %H:%M")))
+    c.execute(q("INSERT INTO transaktioner (holding_id, typ, antal, kurs, fx_rate, datum, notering, skapad) VALUES (?,?,?,?,?,?,?,?)", db_type),
+              (holding_id, typ, antal, kurs, fx_rate, datum, notering, datetime.now().strftime("%Y-%m-%d %H:%M")))
     conn.commit()
     conn.close()
-    return redirect(url_for("portfolio_vy", portfolj_id=portfolj_id))
+    return redirect(url_for("portfolio_vy", portfolio_id=portfolio_id))
 
 
-@app.route("/portfolio/<int:portfolj_id>/importera-excel", methods=["POST"])
+@app.route("/portfolio/<int:portfolio_id>/importera-excel", methods=["POST"])
 @inloggning_kravs
-def portfolio_importera_excel(portfolj_id):
+def portfolio_importera_excel(portfolio_id):
     """Importerar innehav från Excel-fil."""
     if "fil" not in request.files:
-        return redirect(url_for("portfolio_vy", portfolj_id=portfolj_id))
+        return redirect(url_for("portfolio_vy", portfolio_id=portfolio_id))
     fil = request.files["fil"]
     if not fil.filename:
-        return redirect(url_for("portfolio_vy", portfolj_id=portfolj_id))
+        return redirect(url_for("portfolio_vy", portfolio_id=portfolio_id))
     try:
         import io
         df = pd.read_excel(fil, sheet_name="Innehav", header=2)
-        df.columns = ["depa","namn","antal","kurs","valuta","fx","mv","anskaffning","orealiserat","orealiserat_pct","andel","tillgangsslag"]
+        df.columns = ["depa","namn","antal","kurs","valuta","fx","mv","cost_basis","unrealized","unrealized_pct","andel","asset_type"]
         df = df.dropna(subset=["namn","antal","kurs"])
         conn, db_type = get_conn()
         c = conn.cursor()
-        importerade = 0
+        imported_count = 0
         for _, row in df.iterrows():
             namn = str(row["namn"]).strip()
             if not namn or namn == "nan":
@@ -2782,30 +2782,30 @@ def portfolio_importera_excel(portfolj_id):
             antal = float(row["antal"]) if pd.notna(row["antal"]) else 0
             kurs = float(row["kurs"]) if pd.notna(row["kurs"]) else 0
             valuta = str(row["valuta"]).strip() if pd.notna(row["valuta"]) else "SEK"
-            anskaffning = float(row["anskaffning"]) if pd.notna(row["anskaffning"]) else antal * kurs
-            tillgangsslag = str(row["tillgangsslag"]).strip() if pd.notna(row["tillgangsslag"]) else "Aktie"
-            # Förenkla tillgangsslag
-            if "fond" in tillgangsslag.lower(): tillgangsslag = "Fond"
-            elif "etf" in tillgangsslag.lower() or "råvara" in tillgangsslag.lower(): tillgangsslag = "ETF"
-            elif "invest" in tillgangsslag.lower(): tillgangsslag = "Aktie"
-            else: tillgangsslag = "Aktie"
+            cost_basis = float(row["cost_basis"]) if pd.notna(row["cost_basis"]) else antal * kurs
+            asset_type = str(row["asset_type"]).strip() if pd.notna(row["asset_type"]) else "Aktie"
+            # Förenkla asset_type
+            if "fond" in asset_type.lower(): asset_type = "Fond"
+            elif "etf" in asset_type.lower() or "råvara" in asset_type.lower(): asset_type = "ETF"
+            elif "invest" in asset_type.lower(): asset_type = "Aktie"
+            else: asset_type = "Aktie"
             # Ticker = namn som placeholder, kan ändras
             ticker = namn.upper().replace(" ", "-")[:10]
             # Spara innehav
-            c.execute(q("INSERT INTO innehav (portfolj_id, namn, ticker, tillgangsslag, valuta, skapad) VALUES (?,?,?,?,?,?)", db_type),
-                      (portfolj_id, namn, ticker, tillgangsslag, valuta, datetime.now().strftime("%Y-%m-%d %H:%M")))
+            c.execute(q("INSERT INTO innehav (portfolio_id, namn, ticker, asset_type, valuta, skapad) VALUES (?,?,?,?,?,?)", db_type),
+                      (portfolio_id, namn, ticker, asset_type, valuta, datetime.now().strftime("%Y-%m-%d %H:%M")))
             if db_type == "postgres":
                 c.execute("SELECT lastval()")
             else:
                 c.execute("SELECT last_insert_rowid()")
             iid = c.fetchone()[0]
-            snitt_kurs = anskaffning / antal if antal else kurs
-            c.execute(q("INSERT INTO transaktioner (innehav_id, typ, antal, kurs, fx_kurs, datum, notering, skapad) VALUES (?,?,?,?,?,?,?,?)", db_type),
-                      (iid, "KOP", antal, snitt_kurs, 1.0, datetime.now().strftime("%Y-%m-%d"), "Importerad från Excel", datetime.now().strftime("%Y-%m-%d %H:%M")))
-            importerade += 1
+            avg_price = cost_basis / antal if antal else kurs
+            c.execute(q("INSERT INTO transaktioner (holding_id, typ, antal, kurs, fx_rate, datum, notering, skapad) VALUES (?,?,?,?,?,?,?,?)", db_type),
+                      (iid, "KOP", antal, avg_price, 1.0, datetime.now().strftime("%Y-%m-%d"), "Importerad från Excel", datetime.now().strftime("%Y-%m-%d %H:%M")))
+            imported_count += 1
         conn.commit()
         conn.close()
-        return redirect(url_for("portfolio_vy", portfolj_id=portfolj_id))
+        return redirect(url_for("portfolio_vy", portfolio_id=portfolio_id))
     except Exception as e:
         return f"Import-fel: {str(e)}", 500
 
