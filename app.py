@@ -586,7 +586,8 @@ def dashboard():
                    SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) as antal
                    FROM innehav i LEFT JOIN transaktioner t ON t.innehav_id=i.id
                    WHERE i.portfolj_id IN ({placeholders})
-                   GROUP BY i.id HAVING antal > 0""", search_ids)
+                   GROUP BY i.id, i.ticker, i.valuta
+                   HAVING SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) > 0""", search_ids)
         innehav_rader = c.fetchall()
         tot_mv = 0
         tot_daglig_vikt = 0
@@ -2063,7 +2064,7 @@ def portfolio_vy(portfolj_id):
                FROM innehav i
                LEFT JOIN transaktioner t ON t.innehav_id=i.id
                WHERE i.portfolj_id IN ({placeholders})
-               GROUP BY i.id
+               GROUP BY i.id, i.namn, i.ticker, i.tillgangsslag, i.valuta, i.portfolj_id
                HAVING SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) > 0""",
                portfolj_ids)
     innehav_rader = c.fetchall()
@@ -2302,13 +2303,13 @@ def portfolio_vy(portfolj_id):
                     .then(r => r.json())
                     .then(data => {
                         if (!data.length) { div.innerHTML='<div class="sök-rad" style="color:#888;">Inga träffar</div>'; return; }
-                        div.innerHTML = data.map(d =>
-                            '<div class="sök-rad" onclick="välj('' + d.ticker.replace(/'/g,"\'") + '','' +
-                            d.namn.replace(/'/g,"\'") + '','' + d.typ + '')">' +
+                        div.innerHTML = data.map(d => {
+                            const t = d.ticker.replace(/"/g,'&quot;');
+                            const n = d.namn.replace(/"/g,'&quot;');
+                            return '<div class="sök-rad" onclick=\'välj("' + t + '","' + n + '","' + d.typ + '")\'>'+
                             '<strong>' + d.ticker + '</strong> – ' + d.namn +
-                            ' <span style="color:#888;font-size:0.8em;">(' + d.typ + ')</span></div>'
-                        ).join('');
-                    });
+                            ' <span style="color:#888;font-size:0.8em;">(' + d.typ + ')</span></div>';
+                        }).join('');
             }, 350);
         });
         function välj(ticker, namn, typ) {
