@@ -578,14 +578,14 @@ def dashboard():
     portfoljer = []
     for pid, pnamn, pniva in portfoljer_rader:
         # Kolla om sammanslagen
-        c.execute(q("SELECT del_portfolio_id FROM portfolj_sammanslagning WHERE total_portfolio_id=?", db_type), (pid,))
+        c.execute(q("SELECT del_portfolj_id FROM portfolj_sammanslagning WHERE total_portfolj_id=?", db_type), (pid,))
         sub_ids = [r[0] for r in c.fetchall()]
         search_ids = sub_ids if sub_ids else [pid]
         placeholders = ",".join(["%s" if db_type == "postgres" else "?" for _ in search_ids])
         c.execute(f"""SELECT i.ticker, i.valuta,
                    SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) as antal
-                   FROM innehav i LEFT JOIN transaktioner t ON t.holding_id=i.id
-                   WHERE i.portfolio_id IN ({placeholders})
+                   FROM innehav i LEFT JOIN transaktioner t ON t.innehav_id=i.id
+                   WHERE i.portfolj_id IN ({placeholders})
                    GROUP BY i.id, i.ticker, i.valuta
                    HAVING SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) > 0""", search_ids)
         innehav_rader = c.fetchall()
@@ -2046,7 +2046,7 @@ def portfolio_vy(portfolio_id):
     portfolj = {"id": rad[0], "namn": rad[1], "niva": rad[2]}
 
     # Kolla om detta är en sammanslagen portfölj
-    c.execute(q("SELECT del_portfolio_id FROM portfolj_sammanslagning WHERE total_portfolio_id=?", db_type), (portfolio_id,))
+    c.execute(q("SELECT del_portfolj_id FROM portfolj_sammanslagning WHERE total_portfolj_id=?", db_type), (portfolio_id,))
     sub_portfolios = [r[0] for r in c.fetchall()]
     is_merged = len(sub_portfolios) > 0
 
@@ -2058,13 +2058,13 @@ def portfolio_vy(portfolio_id):
 
     # Hämta innehav
     placeholders = ",".join(["%s" if db_type == "postgres" else "?" for _ in portfolio_ids])
-    c.execute(f"""SELECT i.id, i.namn, i.ticker, i.asset_type, i.valuta, i.portfolio_id,
+    c.execute(f"""SELECT i.id, i.namn, i.ticker, i.asset_type, i.valuta, i.portfolj_id,
                SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) as antal,
                SUM(CASE WHEN t.typ='KOP' THEN t.antal*t.kurs WHEN t.typ='SALJ' THEN -t.antal*t.kurs ELSE 0 END) as cost_basis
                FROM innehav i
-               LEFT JOIN transaktioner t ON t.holding_id=i.id
-               WHERE i.portfolio_id IN ({placeholders})
-               GROUP BY i.id, i.namn, i.ticker, i.asset_type, i.valuta, i.portfolio_id
+               LEFT JOIN transaktioner t ON t.innehav_id=i.id
+               WHERE i.portfolj_id IN ({placeholders})
+               GROUP BY i.id, i.namn, i.ticker, i.asset_type, i.valuta, i.portfolj_id
                HAVING SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) > 0""",
                portfolio_ids)
     innehav_rader = c.fetchall()
@@ -2092,7 +2092,7 @@ def portfolio_vy(portfolio_id):
             "antal": antal, "kurs": kurs or 0,
             "mv": mv, "cost_basis": round(cost_basis, 0),
             "unrealized": unrealized, "unrealized_pct": unrealized_pct,
-            "daily_change": daily_change or 0, "portfolio_id": pid
+            "daily_change": daily_change or 0, "portfolj_id": pid
         })
         total_mv += mv
         total_cost += cost_basis
@@ -2363,7 +2363,7 @@ def portfolio_ny():
     new_id = c.fetchone()[0]
     # Spara sammanslagningar
     for del_id in merge_with:
-        c.execute(q("INSERT INTO portfolj_sammanslagning (total_portfolio_id, del_portfolio_id) VALUES (?,?)", db_type),
+        c.execute(q("INSERT INTO portfolj_sammanslagning (total_portfolj_id, del_portfolj_id) VALUES (?,?)", db_type),
                   (new_id, int(del_id)))
     conn.commit()
     conn.close()
@@ -2380,7 +2380,7 @@ def portfolio_detalj(portfolio_id):
     if not prad:
         conn.close()
         return "Portfölj hittades inte", 404
-    c.execute(q("SELECT id, ticker, namn, andel FROM portfolj_innehav WHERE portfolio_id=? ORDER BY andel DESC", db_type), (portfolio_id,))
+    c.execute(q("SELECT id, ticker, namn, andel FROM portfolj_innehav WHERE portfolj_id=? ORDER BY andel DESC", db_type), (portfolio_id,))
     hrader = c.fetchall()
     conn.close()
 
@@ -2514,7 +2514,7 @@ def portfolio_detalj(portfolio_id):
 def portfolio_ta_bort_innehav(portfolio_id, holding_id):
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute(q("DELETE FROM portfolj_innehav WHERE id=? AND portfolio_id=?", db_type), (holding_id, portfolio_id))
+    c.execute(q("DELETE FROM portfolj_innehav WHERE id=? AND portfolj_id=?", db_type), (holding_id, portfolio_id))
     conn.commit()
     conn.close()
     return redirect(url_for("portfolio_detalj", portfolio_id=portfolio_id))
@@ -2525,7 +2525,7 @@ def portfolio_ta_bort_innehav(portfolio_id, holding_id):
 def portfolio_ta_bort(portfolio_id):
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute(q("DELETE FROM portfolj_innehav WHERE portfolio_id=?", db_type), (portfolio_id,))
+    c.execute(q("DELETE FROM portfolj_innehav WHERE portfolj_id=?", db_type), (portfolio_id,))
     c.execute(q("DELETE FROM portfoljer WHERE id=?", db_type), (portfolio_id,))
     conn.commit()
     conn.close()
@@ -2574,13 +2574,13 @@ def portfolio_lagg_till(portfolio_id):
     c = conn.cursor()
 
     # Kolla om ticker redan finns i portföljen
-    c.execute(q("SELECT id FROM innehav WHERE portfolio_id=? AND ticker=?", db_type), (portfolio_id, ticker))
+    c.execute(q("SELECT id FROM innehav WHERE portfolj_id=? AND ticker=?", db_type), (portfolio_id, ticker))
     existing_holding = c.fetchone()
 
     if existing_holding:
         holding_id = existing_holding[0]
     else:
-        c.execute(q("INSERT INTO innehav (portfolio_id, namn, ticker, asset_type, valuta, skapad) VALUES (?,?,?,?,?,?)", db_type),
+        c.execute(q("INSERT INTO innehav (portfolj_id, namn, ticker, asset_type, valuta, skapad) VALUES (?,?,?,?,?,?)", db_type),
                   (portfolio_id, namn, ticker, asset_type, valuta, datetime.now().strftime("%Y-%m-%d %H:%M")))
         if db_type == "postgres":
             c.execute("SELECT lastval()")
@@ -2588,7 +2588,7 @@ def portfolio_lagg_till(portfolio_id):
             c.execute("SELECT last_insert_rowid()")
         holding_id = c.fetchone()[0]
 
-    c.execute(q("INSERT INTO transaktioner (holding_id, typ, antal, kurs, datum, notering, skapad) VALUES (?,?,?,?,?,?,?)", db_type),
+    c.execute(q("INSERT INTO transaktioner (innehav_id, typ, antal, kurs, datum, notering, skapad) VALUES (?,?,?,?,?,?,?)", db_type),
               (holding_id, "KOP", antal, kurs, datum, notering, datetime.now().strftime("%Y-%m-%d %H:%M")))
     conn.commit()
     conn.close()
@@ -2600,14 +2600,14 @@ def portfolio_lagg_till(portfolio_id):
 def portfolio_innehav_detalj(holding_id):
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute(q("SELECT i.id, i.namn, i.ticker, i.asset_type, i.valuta, i.portfolio_id FROM innehav i WHERE i.id=?", db_type), (holding_id,))
+    c.execute(q("SELECT i.id, i.namn, i.ticker, i.asset_type, i.valuta, i.portfolj_id FROM innehav i WHERE i.id=?", db_type), (holding_id,))
     rad = c.fetchone()
     if not rad:
         conn.close()
         return redirect(url_for("portfolio_sida"))
     iid, namn, ticker, asset_type, valuta, portfolio_id = rad
 
-    c.execute(q("SELECT typ, antal, kurs, datum, notering FROM transaktioner WHERE holding_id=? ORDER BY datum", db_type), (holding_id,))
+    c.execute(q("SELECT typ, antal, kurs, datum, notering FROM transaktioner WHERE innehav_id=? ORDER BY datum", db_type), (holding_id,))
     transaktioner = [{"typ": r[0], "antal": r[1], "kurs": r[2], "datum": r[3], "notering": r[4]} for r in c.fetchall()]
     conn.close()
 
@@ -2715,7 +2715,7 @@ def innehav_ta_bort(holding_id):
     c.execute(q("SELECT portfolio_id FROM innehav WHERE id=?", db_type), (holding_id,))
     rad = c.fetchone()
     portfolio_id = rad[0] if rad else 1
-    c.execute(q("DELETE FROM transaktioner WHERE holding_id=?", db_type), (holding_id,))
+    c.execute(q("DELETE FROM transaktioner WHERE innehav_id=?", db_type), (holding_id,))
     c.execute(q("DELETE FROM innehav WHERE id=?", db_type), (holding_id,))
     conn.commit()
     conn.close()
@@ -2751,7 +2751,7 @@ def innehav_transaktion(holding_id):
         except:
             pass
 
-    c.execute(q("INSERT INTO transaktioner (holding_id, typ, antal, kurs, fx_rate, datum, notering, skapad) VALUES (?,?,?,?,?,?,?,?)", db_type),
+    c.execute(q("INSERT INTO transaktioner (innehav_id, typ, antal, kurs, fx_rate, datum, notering, skapad) VALUES (?,?,?,?,?,?,?,?)", db_type),
               (holding_id, typ, antal, kurs, fx_rate, datum, notering, datetime.now().strftime("%Y-%m-%d %H:%M")))
     conn.commit()
     conn.close()
@@ -2792,7 +2792,7 @@ def portfolio_importera_excel(portfolio_id):
             # Ticker = namn som placeholder, kan ändras
             ticker = namn.upper().replace(" ", "-")[:10]
             # Spara innehav
-            c.execute(q("INSERT INTO innehav (portfolio_id, namn, ticker, asset_type, valuta, skapad) VALUES (?,?,?,?,?,?)", db_type),
+            c.execute(q("INSERT INTO innehav (portfolj_id, namn, ticker, asset_type, valuta, skapad) VALUES (?,?,?,?,?,?)", db_type),
                       (portfolio_id, namn, ticker, asset_type, valuta, datetime.now().strftime("%Y-%m-%d %H:%M")))
             if db_type == "postgres":
                 c.execute("SELECT lastval()")
@@ -2800,7 +2800,7 @@ def portfolio_importera_excel(portfolio_id):
                 c.execute("SELECT last_insert_rowid()")
             iid = c.fetchone()[0]
             avg_price = cost_basis / antal if antal else kurs
-            c.execute(q("INSERT INTO transaktioner (holding_id, typ, antal, kurs, fx_rate, datum, notering, skapad) VALUES (?,?,?,?,?,?,?,?)", db_type),
+            c.execute(q("INSERT INTO transaktioner (innehav_id, typ, antal, kurs, fx_rate, datum, notering, skapad) VALUES (?,?,?,?,?,?,?,?)", db_type),
                       (iid, "KOP", antal, avg_price, 1.0, datetime.now().strftime("%Y-%m-%d"), "Importerad från Excel", datetime.now().strftime("%Y-%m-%d %H:%M")))
             imported_count += 1
         conn.commit()
