@@ -474,6 +474,36 @@ BASE_STYLE = """
 </style>
 """
 
+PORTFOLIO_STYLE = """
+    <style>
+        .tb-header { background:#1F3864; color:#fff; padding:16px 20px; border-radius:8px 8px 0 0; font-weight:bold; font-size:1.05em; }
+        .tb-table { width:100%; border-collapse:collapse; background:#fff; border-radius:0 0 8px 8px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,0.08); }
+        .tb-table th { background:#D9E2F3; color:#1F3864; padding:9px 12px; text-align:left; font-size:0.82em; font-weight:bold; border-bottom:2px solid #1F3864; }
+        .tb-table td { padding:8px 12px; font-size:0.87em; border-bottom:1px solid #eef0f5; }
+        .tb-table tr:hover td { background:#f0f4ff; }
+        .tb-table tr:last-child td { border-bottom:none; }
+        .tb-section { margin-bottom:28px; }
+        .pos { color:#007700; font-weight:bold; }
+        .neg { color:#cc0000; font-weight:bold; }
+        .badge-typ { display:inline-block; padding:2px 8px; border-radius:10px; font-size:0.75em; font-weight:bold; background:#D9E2F3; color:#1F3864; }
+        .portfolj-tabs { display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap; }
+        .portfolj-tab { padding:7px 18px; border-radius:20px; border:2px solid #1F3864; color:#1F3864; font-size:0.88em; font-weight:bold; text-decoration:none; background:#fff; }
+        .portfolj-tab.aktiv { background:#1F3864; color:#fff; }
+        .kpi-rad { display:grid; grid-template-columns:repeat(auto-fill, minmax(180px,1fr)); gap:12px; margin-bottom:24px; }
+        .kpi-box { background:#fff; border-radius:8px; padding:16px 18px; border:1px solid #ddd; border-left:4px solid #1F3864; }
+        .kpi-box .etikett { color:#888; font-size:0.78em; margin-bottom:4px; }
+        .kpi-box .varde { font-size:1.3em; font-weight:bold; color:#111; }
+        .ny-innehav-form { background:#fff; border-radius:10px; padding:22px; border:1px solid #ddd; margin-bottom:24px; }
+        .form-grid-3 { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:12px; }
+        .fg label { display:block; color:#666; font-size:0.8em; font-weight:bold; margin-bottom:3px; }
+        .fg input, .fg select { width:100%; padding:8px 10px; border:1px solid #ccc; border-radius:5px; font-size:0.9em; }
+        .sök-resultat { background:#fff; border:1px solid #ccc; border-radius:6px; max-height:200px; overflow-y:auto; position:absolute; z-index:100; width:100%; }
+        .sök-rad { padding:8px 12px; cursor:pointer; font-size:0.88em; border-bottom:1px solid #eee; }
+        .sök-rad:hover { background:#f0f4ff; }
+        .sök-wrapper { position:relative; }
+    </style>
+"""
+
 # ── Routes ─────────────────────────────────────────────────
 
 @app.route("/login", methods=["GET", "POST"])
