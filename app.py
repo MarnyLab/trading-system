@@ -117,6 +117,29 @@ def init_db():
         )
     """)
     c.execute(f"""
+        CREATE TABLE IF NOT EXISTS innehav (
+            id {serial},
+            portfolj_id INTEGER NOT NULL,
+            namn TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            tillgangsslag TEXT NOT NULL,
+            valuta TEXT DEFAULT 'SEK',
+            skapad TEXT NOT NULL
+        )
+    """)
+    c.execute(f"""
+        CREATE TABLE IF NOT EXISTS transaktioner (
+            id {serial},
+            innehav_id INTEGER NOT NULL,
+            typ TEXT NOT NULL,
+            antal REAL NOT NULL,
+            kurs REAL NOT NULL,
+            datum TEXT NOT NULL,
+            notering TEXT,
+            skapad TEXT NOT NULL
+        )
+    """)
+    c.execute(f"""
         CREATE TABLE IF NOT EXISTS prisalarm (
             id {serial},
             ticker TEXT NOT NULL,
@@ -1886,57 +1909,302 @@ def hamta_portfolj_kurs(ticker):
 def portfolio_sida():
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute("SELECT id, namn, niva, skapad FROM portfoljer ORDER BY niva, namn")
-    rader = c.fetchall()
+    c.execute("SELECT id, namn, niva, skapad FROM portfoljer ORDER BY id")
+    portfoljer = [{"id": r[0], "namn": r[1], "niva": r[2], "skapad": r[3]} for r in c.fetchall()]
     conn.close()
-    portfoljer = [{"id": r[0], "namn": r[1], "niva": r[2], "skapad": r[3]} for r in rader]
+    return redirect(url_for("portfolio_vy", portfolj_id=portfoljer[0]["id"])) if portfoljer else redirect(url_for("portfolio_ny_sida"))
+
+
+@app.route("/portfolio/ny-sida")
+@inloggning_kravs
+def portfolio_ny_sida():
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT id, namn FROM portfoljer ORDER BY id")
+    befintliga = [{"id": r[0], "namn": r[1]} for r in c.fetchall()]
+    conn.close()
 
     html = """<!DOCTYPE html><html>
-    <head><title>Portföljer</title><meta charset="utf-8">""" + BASE_STYLE + """
-    <style>
-        .ny-form { background:#fff; border-radius:10px; padding:22px; border:1px solid #ddd; max-width:480px; margin-bottom:30px; }
-        .fg { margin-bottom:12px; }
-        .fg label { display:block; color:#888; font-size:0.82em; font-weight:bold; margin-bottom:4px; }
-        .fg input, .fg select { width:100%; padding:9px 12px; border:1px solid #ccc; border-radius:6px; font-size:0.95em; }
-        .p-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px,1fr)); gap:16px; }
-        .p-kort { background:#fff; border-radius:10px; padding:20px; border:1px solid #ddd; cursor:pointer; transition: box-shadow 0.15s; }
-        .p-kort:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .niva-badge { display:inline-block; padding:3px 10px; border-radius:12px; font-size:0.8em; font-weight:bold; color:#fff; margin-bottom:10px; }
-    </style></head>
-    <body>""" + NAV_HTML + """
-        <h1>Portföljer</h1>
-        <div class="ny-form">
-            <h2 style="font-size:1em; color:#444; margin-bottom:14px;">+ Ny portfölj</h2>
+    <head><title>Ny portfölj</title><meta charset="utf-8">""" + BASE_STYLE + PORTFOLIO_STYLE + """
+    </head><body>""" + NAV_HTML + """
+        <h1>Skapa ny portfölj</h1>
+        <div class="ny-innehav-form" style="max-width:520px;">
             <form method="POST" action="/portfolio/ny">
-                <div class="fg"><label>Namn</label><input type="text" name="namn" placeholder="Min portfölj" required></div>
-                <div class="fg">
-                    <label>Risknivå</label>
+                <div class="fg" style="margin-bottom:12px;">
+                    <label>Portföljnamn</label>
+                    <input type="text" name="namn" placeholder="t.ex. Bred depå, ISK, Pension" required>
+                </div>
+                <div class="fg" style="margin-bottom:12px;">
+                    <label>Typ</label>
                     <select name="niva">
-                        <option value="Konservativ">Konservativ – lägre risk, stabil avkastning</option>
-                        <option value="Balanserad" selected>Balanserad – mix aktier/räntor</option>
-                        <option value="Aggressiv">Aggressiv – hög risk, hög potential</option>
+                        <option value="Depå">Depå</option>
+                        <option value="ISK">ISK</option>
+                        <option value="Pension">Pension</option>
+                        <option value="KF">Kapitalförsäkring</option>
+                        <option value="Total">Sammanslagen (välj nedan)</option>
                     </select>
                 </div>
-                <button type="submit" style="padding:9px 24px; background:#0044cc; color:#fff; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">Skapa portfölj</button>
+                {% if befintliga %}
+                <div class="fg" style="margin-bottom:16px;">
+                    <label>Slå ihop befintliga portföljer (valfritt)</label>
+                    {% for p in befintliga %}
+                    <div style="margin-top:6px;">
+                        <input type="checkbox" name="slå_ihop" value="{{ p.id }}" id="p{{ p.id }}">
+                        <label for="p{{ p.id }}" style="display:inline; font-weight:normal; color:#333;">{{ p.namn }}</label>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                <button type="submit" style="padding:9px 24px; background:#1F3864; color:#fff; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">Skapa portfölj</button>
             </form>
         </div>
-        {% if portfoljer %}
-        <div class="p-grid">
-        {% for p in portfoljer %}
-            <a href="/portfolio/{{ p.id }}" style="text-decoration:none; color:inherit;">
-            <div class="p-kort">
-                <div class="niva-badge" style="background:{{ niva_farger.get(p.niva, '#888') }};">{{ p.niva }}</div>
-                <div style="font-size:1.15em; font-weight:bold; color:#111; margin-bottom:6px;">{{ p.namn }}</div>
-                <div style="color:#888; font-size:0.82em;">Skapad {{ p.skapad[:10] }}</div>
-            </div>
-            </a>
+    </body></html>"""
+    return render_template_string(html, befintliga=befintliga)
+
+
+@app.route("/portfolio/<int:portfolj_id>")
+@inloggning_kravs
+def portfolio_vy(portfolj_id):
+    conn, db_type = get_conn()
+    c = conn.cursor()
+
+    # Hämta alla portföljer för tabbar
+    c.execute("SELECT id, namn, niva FROM portfoljer ORDER BY id")
+    alla_portfoljer = [{"id": r[0], "namn": r[1], "niva": r[2]} for r in c.fetchall()]
+
+    # Hämta denna portfölj
+    c.execute(q("SELECT id, namn, niva FROM portfoljer WHERE id=?", db_type), (portfolj_id,))
+    rad = c.fetchone()
+    if not rad:
+        conn.close()
+        return redirect(url_for("portfolio_sida"))
+    portfolj = {"id": rad[0], "namn": rad[1], "niva": rad[2]}
+
+    # Hämta innehav med transaktioner
+    c.execute(q("""SELECT i.id, i.namn, i.ticker, i.tillgangsslag, i.valuta,
+                   SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) as antal,
+                   SUM(CASE WHEN t.typ='KOP' THEN t.antal*t.kurs WHEN t.typ='SALJ' THEN -t.antal*t.kurs ELSE 0 END) as anskaffning
+                   FROM innehav i
+                   LEFT JOIN transaktioner t ON t.innehav_id=i.id
+                   WHERE i.portfolj_id=?
+                   GROUP BY i.id""", db_type), (portfolj_id,))
+    innehav_rader = c.fetchall()
+    conn.close()
+
+    # Hämta live-kurser
+    innehav = []
+    totalt_mv = 0
+    totalt_ansk = 0
+    tillgangsslag_data = {}
+
+    for r in innehav_rader:
+        iid, namn, ticker, tillgangsslag, valuta, antal, anskaffning = r
+        antal = antal or 0
+        anskaffning = anskaffning or 0
+        kurs, daglig = hamta_portfolj_kurs(ticker)
+        mv = round(antal * kurs, 0) if kurs and antal else 0
+        orealiserat = round(mv - anskaffning, 0) if mv and anskaffning else 0
+        orealiserat_pct = round((orealiserat / anskaffning * 100), 1) if anskaffning else 0
+
+        innehav.append({
+            "id": iid, "namn": namn, "ticker": ticker,
+            "tillgangsslag": tillgangsslag, "valuta": valuta,
+            "antal": antal, "kurs": kurs or 0,
+            "mv": mv, "anskaffning": round(anskaffning, 0),
+            "orealiserat": orealiserat, "orealiserat_pct": orealiserat_pct,
+            "daglig": daglig or 0
+        })
+        totalt_mv += mv
+        totalt_ansk += anskaffning
+        if tillgangsslag not in tillgangsslag_data:
+            tillgangsslag_data[tillgangsslag] = 0
+        tillgangsslag_data[tillgangsslag] += mv
+
+    totalt_orealiserat = totalt_mv - totalt_ansk
+    totalt_pct = round(totalt_orealiserat / totalt_ansk * 100, 1) if totalt_ansk else 0
+
+    # Sortera efter marknadsvärde
+    innehav.sort(key=lambda x: x["mv"], reverse=True)
+
+    import json as _json
+    tillgangsslag_json = _json.dumps(list(tillgangsslag_data.keys()))
+    tillgangsslag_values = _json.dumps([round(v) for v in tillgangsslag_data.values()])
+
+    html = """<!DOCTYPE html><html>
+    <head><title>{{ portfolj.namn }}</title><meta charset="utf-8">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>""" + BASE_STYLE + PORTFOLIO_STYLE + """
+    </head><body>""" + NAV_HTML + """
+
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+            <h1>Portfölj</h1>
+            <a href="/portfolio/ny-sida" style="padding:7px 16px; background:#1F3864; color:#fff; border-radius:6px; text-decoration:none; font-size:0.88em;">+ Ny portfölj</a>
+        </div>
+
+        <div class="portfolj-tabs">
+        {% for p in alla_portfoljer %}
+            <a href="/portfolio/{{ p.id }}" class="portfolj-tab {{ 'aktiv' if p.id == portfolj.id else '' }}">{{ p.namn }}</a>
         {% endfor %}
         </div>
-        {% else %}
-        <p style="color:#888;">Inga portföljer skapade ännu.</p>
-        {% endif %}
+
+        <div class="kpi-rad">
+            <div class="kpi-box">
+                <div class="etikett">Marknadsvärde</div>
+                <div class="varde">{{ "{:,.0f}".format(totalt_mv).replace(",", " ") }} SEK</div>
+            </div>
+            <div class="kpi-box">
+                <div class="etikett">Anskaffningsvärde</div>
+                <div class="varde">{{ "{:,.0f}".format(totalt_ansk).replace(",", " ") }} SEK</div>
+            </div>
+            <div class="kpi-box">
+                <div class="etikett">Orealiserat</div>
+                <div class="varde {{ 'pos' if totalt_orealiserat > 0 else 'neg' }}">
+                    {{ "{:,.0f}".format(totalt_orealiserat).replace(",", " ") }} SEK
+                </div>
+            </div>
+            <div class="kpi-box">
+                <div class="etikett">Avkastning</div>
+                <div class="varde {{ 'pos' if totalt_pct > 0 else 'neg' }}">{{ "%+.1f"|format(totalt_pct) }}%</div>
+            </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 340px; gap:20px; margin-bottom:28px;">
+            <div class="tb-section">
+                <div class="tb-header">Innehav</div>
+                <table class="tb-table">
+                    <thead><tr>
+                        <th>Värdepapper</th><th>Typ</th><th>Antal</th>
+                        <th>Kurs</th><th>Marknadsvärde</th><th>Ansk.</th>
+                        <th>Orealiserat</th><th>%</th><th>Dag%</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                    {% for h in innehav %}
+                    <tr>
+                        <td><strong>{{ h.namn }}</strong><br><span style="color:#999; font-size:0.78em;">{{ h.ticker }}</span></td>
+                        <td><span class="badge-typ">{{ h.tillgangsslag[:12] }}</span></td>
+                        <td>{{ "%.2f"|format(h.antal) }}</td>
+                        <td>{{ "%.2f"|format(h.kurs) }} {{ h.valuta }}</td>
+                        <td>{{ "{:,.0f}".format(h.mv).replace(",", " ") }}</td>
+                        <td>{{ "{:,.0f}".format(h.anskaffning).replace(",", " ") }}</td>
+                        <td class="{{ 'pos' if h.orealiserat > 0 else 'neg' }}">{{ "{:,.0f}".format(h.orealiserat).replace(",", " ") }}</td>
+                        <td class="{{ 'pos' if h.orealiserat_pct > 0 else 'neg' }}">{{ "%+.1f"|format(h.orealiserat_pct) }}%</td>
+                        <td class="{{ 'pos' if h.daglig > 0 else 'neg' }}">{{ "%+.1f"|format(h.daglig) }}%</td>
+                        <td><a href="/portfolio/innehav/{{ h.id }}" style="color:#0044cc; font-size:0.8em;">Detalj</a></td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div>
+                <div class="tb-header">Fördelning per tillgångsslag</div>
+                <div style="background:#fff; padding:16px; border-radius:0 0 8px 8px; border:1px solid #eee;">
+                    <canvas id="donut" height="220"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="ny-innehav-form">
+            <div class="tb-header" style="border-radius:8px 8px 0 0; margin:-22px -22px 16px -22px;">+ Lägg till innehav</div>
+            <div class="sök-wrapper" style="margin-bottom:12px;">
+                <label style="display:block; color:#666; font-size:0.8em; font-weight:bold; margin-bottom:3px;">Sök värdepapper (namn eller ticker)</label>
+                <input type="text" id="sök-input" placeholder="t.ex. Investor, AAPL, SPY..." autocomplete="off"
+                    style="width:100%; padding:9px 12px; border:1px solid #ccc; border-radius:6px; font-size:0.95em;">
+                <div id="sök-resultat" class="sök-resultat" style="display:none;"></div>
+            </div>
+            <form method="POST" action="/portfolio/{{ portfolj.id }}/lagg-till" id="innehav-form">
+                <div class="form-grid-3">
+                    <div class="fg">
+                        <label>Namn</label>
+                        <input type="text" name="namn" id="f-namn" required placeholder="Investor AB B">
+                    </div>
+                    <div class="fg">
+                        <label>Yahoo Ticker</label>
+                        <input type="text" name="ticker" id="f-ticker" required placeholder="INVE-B.ST">
+                    </div>
+                    <div class="fg">
+                        <label>Tillgångsslag</label>
+                        <select name="tillgangsslag" id="f-typ">
+                            <option>Aktie</option><option>ETF</option><option>Fond</option>
+                            <option>Råvara</option><option>Obligation</option><option>Kassa</option>
+                        </select>
+                    </div>
+                    <div class="fg">
+                        <label>Valuta</label>
+                        <select name="valuta">
+                            <option>SEK</option><option>USD</option><option>EUR</option><option>DKK</option><option>NOK</option>
+                        </select>
+                    </div>
+                    <div class="fg">
+                        <label>Antal</label>
+                        <input type="number" step="0.001" name="antal" required placeholder="100">
+                    </div>
+                    <div class="fg">
+                        <label>Köpkurs</label>
+                        <input type="number" step="0.01" name="kurs" required placeholder="350.50">
+                    </div>
+                    <div class="fg">
+                        <label>Köpdatum</label>
+                        <input type="date" name="datum" required value="{{ today }}">
+                    </div>
+                    <div class="fg" style="grid-column:span 2;">
+                        <label>Notering (valfritt)</label>
+                        <input type="text" name="notering" placeholder="t.ex. Inköp månadsspar">
+                    </div>
+                </div>
+                <button type="submit" style="padding:9px 24px; background:#1F3864; color:#fff; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">Lägg till</button>
+            </form>
+        </div>
+
+        <script>
+        // Donut chart
+        const ctx = document.getElementById('donut').getContext('2d');
+        new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: {{ tillgangsslag_json|safe }},
+                datasets: [{ data: {{ tillgangsslag_values|safe }},
+                    backgroundColor: ['#1F3864','#2E5FA3','#4472C4','#9DC3E6','#D9E2F3','#A9C4E4','#6FA8DC','#3D6FA6','#2A5299'] }]
+            },
+            options: { plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } }, cutout: '65%' }
+        });
+
+        // Ticker search
+        let sökTimer;
+        document.getElementById('sök-input').addEventListener('input', function() {
+            clearTimeout(sökTimer);
+            const q = this.value.trim();
+            if (q.length < 2) { document.getElementById('sök-resultat').style.display='none'; return; }
+            sökTimer = setTimeout(() => {
+                fetch('/portfolio/sök-ticker?q=' + encodeURIComponent(q))
+                    .then(r => r.json())
+                    .then(data => {
+                        const div = document.getElementById('sök-resultat');
+                        if (!data.length) { div.style.display='none'; return; }
+                        div.innerHTML = data.map(d =>
+                            '<div class="sök-rad" onclick="välj('' + d.ticker + '','' + d.namn.replace(/'/g,"\'") + '','' + d.typ + '')">' +
+                            '<strong>' + d.ticker + '</strong> – ' + d.namn + ' <span style="color:#888;font-size:0.8em;">(' + d.typ + ')</span></div>'
+                        ).join('');
+                        div.style.display='block';
+                    });
+            }, 300);
+        });
+        function välj(ticker, namn, typ) {
+            document.getElementById('f-ticker').value = ticker;
+            document.getElementById('f-namn').value = namn;
+            document.getElementById('sök-input').value = namn;
+            document.getElementById('sök-resultat').style.display='none';
+        }
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.sök-wrapper')) document.getElementById('sök-resultat').style.display='none';
+        });
+        </script>
     </body></html>"""
-    return render_template_string(html, portfoljer=portfoljer, niva_farger=NIVA_FARGER)
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    return render_template_string(html, portfolj=portfolj, alla_portfoljer=alla_portfoljer,
+                                  innehav=innehav, totalt_mv=totalt_mv, totalt_ansk=totalt_ansk,
+                                  totalt_orealiserat=totalt_orealiserat, totalt_pct=totalt_pct,
+                                  tillgangsslag_json=tillgangsslag_json, tillgangsslag_values=tillgangsslag_values,
+                                  today=today)
 
 
 @app.route("/portfolio/ny", methods=["POST"])
@@ -2127,6 +2395,176 @@ def portfolio_ta_bort(portfolj_id):
     conn.commit()
     conn.close()
     return redirect(url_for("portfolio_sida"))
+
+
+
+@app.route("/portfolio/sök-ticker")
+@inloggning_kravs
+def portfolio_sök_ticker():
+    q_str = request.args.get("q", "").strip()
+    if len(q_str) < 2:
+        return jsonify([])
+    try:
+        import yfinance as _yf
+        tickers = _yf.Search(q_str, max_results=8)
+        resultat = []
+        for t in tickers.quotes:
+            resultat.append({
+                "ticker": t.get("symbol", ""),
+                "namn": t.get("longname") or t.get("shortname", ""),
+                "typ": t.get("quoteType", "")
+            })
+        return jsonify(resultat[:6])
+    except:
+        return jsonify([])
+
+
+@app.route("/portfolio/<int:portfolj_id>/lagg-till", methods=["POST"])
+@inloggning_kravs
+def portfolio_lagg_till(portfolj_id):
+    namn        = request.form.get("namn", "").strip()
+    ticker      = request.form.get("ticker", "").strip().upper()
+    tillgangsslag = request.form.get("tillgangsslag", "Aktie")
+    valuta      = request.form.get("valuta", "SEK")
+    antal       = float(request.form.get("antal", 0))
+    kurs        = float(request.form.get("kurs", 0))
+    datum       = request.form.get("datum", datetime.now().strftime("%Y-%m-%d"))
+    notering    = request.form.get("notering", "")
+
+    conn, db_type = get_conn()
+    c = conn.cursor()
+
+    # Kolla om ticker redan finns i portföljen
+    c.execute(q("SELECT id FROM innehav WHERE portfolj_id=? AND ticker=?", db_type), (portfolj_id, ticker))
+    befintligt = c.fetchone()
+
+    if befintligt:
+        innehav_id = befintligt[0]
+    else:
+        c.execute(q("INSERT INTO innehav (portfolj_id, namn, ticker, tillgangsslag, valuta, skapad) VALUES (?,?,?,?,?,?)", db_type),
+                  (portfolj_id, namn, ticker, tillgangsslag, valuta, datetime.now().strftime("%Y-%m-%d %H:%M")))
+        if db_type == "postgres":
+            c.execute("SELECT lastval()")
+        else:
+            c.execute("SELECT last_insert_rowid()")
+        innehav_id = c.fetchone()[0]
+
+    c.execute(q("INSERT INTO transaktioner (innehav_id, typ, antal, kurs, datum, notering, skapad) VALUES (?,?,?,?,?,?,?)", db_type),
+              (innehav_id, "KOP", antal, kurs, datum, notering, datetime.now().strftime("%Y-%m-%d %H:%M")))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("portfolio_vy", portfolj_id=portfolj_id))
+
+
+@app.route("/portfolio/innehav/<int:innehav_id>")
+@inloggning_kravs
+def portfolio_innehav_detalj(innehav_id):
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute(q("SELECT i.id, i.namn, i.ticker, i.tillgangsslag, i.valuta, i.portfolj_id FROM innehav i WHERE i.id=?", db_type), (innehav_id,))
+    rad = c.fetchone()
+    if not rad:
+        conn.close()
+        return redirect(url_for("portfolio_sida"))
+    iid, namn, ticker, tillgangsslag, valuta, portfolj_id = rad
+
+    c.execute(q("SELECT typ, antal, kurs, datum, notering FROM transaktioner WHERE innehav_id=? ORDER BY datum", db_type), (innehav_id,))
+    transaktioner = [{"typ": r[0], "antal": r[1], "kurs": r[2], "datum": r[3], "notering": r[4]} for r in c.fetchall()]
+    conn.close()
+
+    # Hämta historisk data
+    try:
+        df = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
+        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+        kurs_nu = float(df["Close"].iloc[-1])
+        x_labels = [d.strftime("%d %b") for d in df.index]
+        kurs_data = [round(float(v), 2) for v in df["Close"].squeeze()]
+
+        # Beräkna snittköpkurs
+        tot_antal = sum(t["antal"] if t["typ"]=="KOP" else -t["antal"] for t in transaktioner)
+        tot_kost = sum(t["antal"]*t["kurs"] if t["typ"]=="KOP" else -t["antal"]*t["kurs"] for t in transaktioner)
+        snitt_kurs = tot_kost / tot_antal if tot_antal else 0
+        mv = round(tot_antal * kurs_nu, 0)
+        orealiserat = round(mv - tot_kost, 0)
+        orealiserat_pct = round(orealiserat / tot_kost * 100, 1) if tot_kost else 0
+    except Exception as e:
+        kurs_nu = 0; x_labels = []; kurs_data = []; snitt_kurs = 0
+        mv = 0; orealiserat = 0; orealiserat_pct = 0; tot_antal = 0; tot_kost = 0
+
+    import json as _json
+    html = """<!DOCTYPE html><html>
+    <head><title>{{ namn }}</title><meta charset="utf-8">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>""" + BASE_STYLE + PORTFOLIO_STYLE + """
+    </head><body>""" + NAV_HTML + """
+        <div style="margin-bottom:14px;">
+            <a href="/portfolio/{{ portfolj_id }}" style="color:#1F3864; font-size:0.88em;">← Tillbaka till portfölj</a>
+        </div>
+        <h1>{{ namn }} <span style="color:#888; font-size:0.7em; font-weight:normal;">{{ ticker }}</span></h1>
+        <div class="kpi-rad" style="margin-top:14px;">
+            <div class="kpi-box"><div class="etikett">Aktuell kurs</div><div class="varde">{{ "%.2f"|format(kurs_nu) }} {{ valuta }}</div></div>
+            <div class="kpi-box"><div class="etikett">Antal</div><div class="varde">{{ "%.3f"|format(tot_antal) }}</div></div>
+            <div class="kpi-box"><div class="etikett">Snittköpkurs</div><div class="varde">{{ "%.2f"|format(snitt_kurs) }}</div></div>
+            <div class="kpi-box"><div class="etikett">Marknadsvärde</div><div class="varde">{{ "{:,.0f}".format(mv).replace(",", " ") }}</div></div>
+            <div class="kpi-box"><div class="etikett">Orealiserat</div>
+                <div class="varde {{ 'pos' if orealiserat > 0 else 'neg' }}">{{ "{:,.0f}".format(orealiserat).replace(",", " ") }} ({{ "%+.1f"|format(orealiserat_pct) }}%)</div>
+            </div>
+        </div>
+
+        <div style="background:#fff; border-radius:8px; padding:20px; border:1px solid #ddd; margin-bottom:24px;">
+            <canvas id="kursgraf" height="120"></canvas>
+        </div>
+
+        <div class="tb-section">
+            <div class="tb-header">Transaktioner</div>
+            <table class="tb-table">
+                <thead><tr><th>Typ</th><th>Datum</th><th>Antal</th><th>Kurs</th><th>Värde</th><th>Notering</th></tr></thead>
+                <tbody>
+                {% for t in transaktioner %}
+                <tr>
+                    <td><span style="color:{{ '#007700' if t.typ=='KOP' else '#cc0000' }}; font-weight:bold;">{{ t.typ }}</span></td>
+                    <td>{{ t.datum }}</td>
+                    <td>{{ "%.3f"|format(t.antal) }}</td>
+                    <td>{{ "%.2f"|format(t.kurs) }}</td>
+                    <td>{{ "{:,.0f}".format(t.antal*t.kurs).replace(",", " ") }}</td>
+                    <td style="color:#888;">{{ t.notering or '' }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <script>
+        new Chart(document.getElementById('kursgraf').getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: {{ x_labels_json|safe }},
+                datasets: [{
+                    label: '{{ namn }}',
+                    data: {{ kurs_data_json|safe }},
+                    borderColor: '#1F3864', backgroundColor: 'rgba(31,56,100,0.07)',
+                    borderWidth: 2, pointRadius: 0, fill: true, tension: 0.3
+                }, {
+                    label: 'Snittköpkurs {{ "%.2f"|format(snitt_kurs) }}',
+                    data: Array({{ x_labels_json|safe }}.length).fill({{ snitt_kurs }}),
+                    borderColor: '#cc6600', borderWidth: 1.5, borderDash: [5,5],
+                    pointRadius: 0, fill: false
+                }]
+            },
+            options: {
+                plugins: { legend: { position: 'top' } },
+                scales: { x: { ticks: { maxTicksLimit: 10 } }, y: { position: 'right' } }
+            }
+        });
+        </script>
+    </body></html>"""
+
+    return render_template_string(html,
+        namn=namn, ticker=ticker, valuta=valuta, portfolj_id=portfolj_id,
+        kurs_nu=kurs_nu, tot_antal=tot_antal, snitt_kurs=snitt_kurs,
+        mv=mv, orealiserat=orealiserat, orealiserat_pct=orealiserat_pct,
+        transaktioner=transaktioner,
+        x_labels_json=_json.dumps(x_labels),
+        kurs_data_json=_json.dumps(kurs_data))
 
 
 if __name__ == "__main__":
