@@ -2358,20 +2358,7 @@ def portfolio_detalj(portfolj_id):
                                   total_daglig=total_daglig, pie_html=pie_html)
 
 
-@app.route("/portfolio/<int:portfolj_id>/lagg-till", methods=["POST"])
-@inloggning_kravs
-def portfolio_lagg_till(portfolj_id):
-    ticker = request.form.get("ticker", "").strip().upper()
-    namn   = request.form.get("namn", "").strip()
-    andel  = float(request.form.get("andel", 0) or 0)
-    if ticker and andel > 0:
-        conn, db_type = get_conn()
-        c = conn.cursor()
-        c.execute(q("INSERT INTO portfolj_innehav (portfolj_id, ticker, namn, andel, skapad) VALUES (?,?,?,?,?)", db_type),
-                  (portfolj_id, ticker, namn, andel, datetime.now().strftime("%Y-%m-%d %H:%M")))
-        conn.commit()
-        conn.close()
-    return redirect(url_for("portfolio_detalj", portfolj_id=portfolj_id))
+
 
 
 @app.route("/portfolio/<int:portfolj_id>/ta-bort/<int:innehav_id>", methods=["POST"])
