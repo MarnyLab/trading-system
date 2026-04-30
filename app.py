@@ -512,6 +512,8 @@ PORTFOLIO_STYLE = """
     </style>
 """
 
+NIVA_FARGER = {"Konservativ": "#007700", "Balanserad": "#0044cc", "Aggressiv": "#cc5500", "Depå": "#1F3864", "ISK": "#2E5FA3", "Pension": "#4472C4", "KF": "#6FA8DC", "Total": "#888888"}
+
 # ── Routes ─────────────────────────────────────────────────
 
 @app.route("/login", methods=["GET", "POST"])
@@ -1951,7 +1953,7 @@ def cron_kolla_alarm():
 
 # ── Portfölj ──────────────────────────────────────────────
 
-NIVA_FARGER = {"Konservativ": "#007700", "Balanserad": "#0044cc", "Aggressiv": "#cc5500"}
+
 
 def hamta_portfolj_kurs(ticker):
     try:
