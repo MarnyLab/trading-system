@@ -2422,17 +2422,21 @@ def portfolio_sök_ticker():
     if len(q_str) < 2:
         return jsonify([])
     try:
-        import yfinance as _yf
-        tickers = _yf.Search(q_str, max_results=8)
+        import requests as _req
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={q_str}&lang=en-US&region=SE&quotesCount=8&newsCount=0"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = _req.get(url, headers=headers, timeout=5)
+        data = r.json()
         resultat = []
-        for t in tickers.quotes:
-            resultat.append({
-                "ticker": t.get("symbol", ""),
-                "namn": t.get("longname") or t.get("shortname", ""),
-                "typ": t.get("quoteType", "")
-            })
+        for t in data.get("quotes", []):
+            if t.get("symbol"):
+                resultat.append({
+                    "ticker": t.get("symbol", ""),
+                    "namn": t.get("longname") or t.get("shortname", t.get("symbol", "")),
+                    "typ": t.get("quoteType", "")
+                })
         return jsonify(resultat[:6])
-    except:
+    except Exception as e:
         return jsonify([])
 
 
