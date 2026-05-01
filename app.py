@@ -2295,37 +2295,46 @@ def portfolio_vy(portfolio_id):
 
         // Sök
         let searchTimer;
-        document.getElementById('search-input').addEventListener('input', function() {
+        const searchInput = document.getElementById('search-input');
+        const searchDiv = document.getElementById('search-results');
+
+        searchInput.addEventListener('input', function() {
             clearTimeout(searchTimer);
-            const searchQ = this.value.trim();
-            const div = document.getElementById('search-results');
-            if (searchQ.length < 2) { div.innerHTML=''; return; }
-            searchTimer = setTimeout(() => {
-                fetch('/portfolio/sok-ticker?q=' + encodeURIComponent(searchQ))
-                    .then(r => r.json())
-                    .then(data => {
-                        if (!data.length) { div.innerHTML='<div class="search-row" style="color:#888;">Inga träffar</div>'; return; }
-                        div.innerHTML = data.map(d => {
-                            const t = d.ticker.replace(/"/g,'&quot;');
-                            const n = d.namn.replace(/"/g,'&quot;');
-                            return '<div class="search-row" onclick=\'selectTicker("' + t + '","' + n + '","' + d.typ + '")\'>'+
-                            '<strong>' + d.ticker + '</strong> – ' + d.namn +
-                            ' <span style="color:#888;font-size:0.8em;">(' + d.typ + ')</span></div>';
-                        }).join('');
+            const q = this.value.trim();
+            if (q.length < 2) { searchDiv.innerHTML = ''; return; }
+            searchTimer = setTimeout(function() {
+                fetch('/portfolio/sok-ticker?q=' + encodeURIComponent(q))
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (!Array.isArray(data) || !data.length) {
+                            searchDiv.innerHTML = '<div class="search-row" style="color:#888;">Inga träffar</div>';
+                            return;
+                        }
+                        searchDiv.innerHTML = '';
+                        data.slice(0,6).forEach(function(d) {
+                            const row = document.createElement('div');
+                            row.className = 'search-row';
+                            row.innerHTML = '<strong>' + d.ticker + '</strong> – ' + d.namn +
+                                ' <span style="color:#888;font-size:0.8em;">(' + d.typ + ')</span>';
+                            row.addEventListener('mousedown', function(e) {
+                                e.preventDefault();
+                                document.getElementById('f-ticker').value = d.ticker;
+                                document.getElementById('f-namn').value = d.namn;
+                                searchInput.value = d.namn + ' (' + d.ticker + ')';
+                                searchDiv.innerHTML = '';
+                                const typMap = {'EQUITY':'Aktie','ETF':'ETF','MUTUALFUND':'Fond','COMMODITY':'Råvara'};
+                                const sel = document.getElementById('f-typ');
+                                const mapped = typMap[d.typ] || 'Aktie';
+                                for(let o of sel.options) { if(o.value === mapped) { o.selected=true; break; } }
+                            });
+                            searchDiv.appendChild(row);
                         });
+                    })
+                    .catch(function(e) { console.error('Sök-fel:', e); });
             }, 350);
         });
-        function selectTicker(ticker, namn, typ) {
-            document.getElementById('f-ticker').value = ticker;
-            document.getElementById('f-namn').value = namn;
-            document.getElementById('search-input').value = namn + ' (' + ticker + ')';
-            document.getElementById('search-results').innerHTML = '';
-            const typMap = {'EQUITY':'Aktie','ETF':'ETF','MUTUALFUND':'Fond','COMMODITY':'Råvara'};
-            const sel = document.getElementById('f-typ');
-            for(let o of sel.options) { if(o.value === (typMap[typ] || 'Aktie')) { o.selected=true; break; } }
-        }
-        document.addEventListener('click', function(e) {
-            if (!e.target.closest('.search-wrapper')) document.getElementById('search-results').innerHTML='';
+        searchInput.addEventListener('blur', function() {
+            setTimeout(function() { searchDiv.innerHTML = ''; }, 200);
         });
 
         // Sälj modal
