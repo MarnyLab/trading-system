@@ -2098,7 +2098,7 @@ def portfolio_vy(portfolio_id):
         })
         total_mv += mv
         total_cost += cost_basis
-        asset_type_data[asset_type] = asset_type_data.get(asset_type, 0) + mv
+        asset_type_data[tillgangsslag] = asset_type_data.get(tillgangsslag, 0) + mv
         currency_data[valuta] = currency_data.get(valuta, 0) + mv
 
     totalt_unrealized = total_mv - total_cost
@@ -2181,7 +2181,7 @@ def portfolio_vy(portfolio_id):
             <tr>
                 <td><a href="/portfolio/innehav/{{ h.id }}" style="color:#1F3864; font-weight:bold; text-decoration:none;">{{ h.namn }}</a>
                     <br><span style="color:#999; font-size:0.78em;">{{ h.ticker }}</span></td>
-                <td><span class="badge-typ">{{ h.asset_type[:10] }}</span></td>
+                <td><span class="badge-typ">{{ h.tillgangsslag[:10] }}</span></td>
                 <td>{{ "%.2f"|format(h.antal) }}</td>
                 <td>{{ "%.2f"|format(h.kurs) }}</td>
                 <td>{{ "{:,.0f}".format(h.mv).replace(",", " ") }}</td>
@@ -2582,7 +2582,7 @@ def portfolio_lagg_till(portfolio_id):
     if existing_holding:
         holding_id = existing_holding[0]
     else:
-        c.execute(q("INSERT INTO innehav (portfolj_id, namn, ticker, asset_type, valuta, skapad) VALUES (?,?,?,?,?,?)", db_type),
+        c.execute(q("INSERT INTO innehav (portfolj_id, namn, ticker, tillgangsslag, valuta, skapad) VALUES (?,?,?,?,?,?)", db_type),
                   (portfolio_id, namn, ticker, asset_type, valuta, datetime.now().strftime("%Y-%m-%d %H:%M")))
         if db_type == "postgres":
             c.execute("SELECT lastval()")
@@ -2607,7 +2607,7 @@ def portfolio_innehav_detalj(holding_id):
     if not rad:
         conn.close()
         return redirect(url_for("portfolio_sida"))
-    iid, namn, ticker, asset_type, valuta, portfolio_id = rad
+    iid, namn, ticker, tillgangsslag, valuta, portfolio_id = rad
 
     c.execute(q("SELECT typ, antal, kurs, datum, notering FROM transaktioner WHERE innehav_id=? ORDER BY datum", db_type), (holding_id,))
     transaktioner = [{"typ": r[0], "antal": r[1], "kurs": r[2], "datum": r[3], "notering": r[4]} for r in c.fetchall()]
@@ -2794,7 +2794,7 @@ def portfolio_importera_excel(portfolio_id):
             # Ticker = namn som placeholder, kan ändras
             ticker = namn.upper().replace(" ", "-")[:10]
             # Spara innehav
-            c.execute(q("INSERT INTO innehav (portfolj_id, namn, ticker, asset_type, valuta, skapad) VALUES (?,?,?,?,?,?)", db_type),
+            c.execute(q("INSERT INTO innehav (portfolj_id, namn, ticker, tillgangsslag, valuta, skapad) VALUES (?,?,?,?,?,?)", db_type),
                       (portfolio_id, namn, ticker, asset_type, valuta, datetime.now().strftime("%Y-%m-%d %H:%M")))
             if db_type == "postgres":
                 c.execute("SELECT lastval()")
