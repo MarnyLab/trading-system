@@ -2090,7 +2090,7 @@ def portfolio_vy(portfolio_id):
 
         innehav.append({
             "id": iid, "namn": namn, "ticker": ticker,
-            "tillgangsslag": asset_type, "valuta": valuta,
+            "tillgangsslag": tillgangsslag, "valuta": valuta,
             "antal": antal, "kurs": kurs or 0,
             "mv": mv, "anskaffning": round(cost_basis, 0),
             "unrealized": unrealized, "unrealized_pct": unrealized_pct,
@@ -2308,7 +2308,7 @@ def portfolio_vy(portfolio_id):
                         div.innerHTML = data.map(d => {
                             const t = d.ticker.replace(/"/g,'&quot;');
                             const n = d.namn.replace(/"/g,'&quot;');
-                            return '<div class="search-row" onclick=\'välj("' + t + '","' + n + '","' + d.typ + '")\'>'+
+                            return '<div class="search-row" onclick=\'selectTicker("' + t + '","' + n + '","' + d.typ + '")\'>'+
                             '<strong>' + d.ticker + '</strong> – ' + d.namn +
                             ' <span style="color:#888;font-size:0.8em;">(' + d.typ + ')</span></div>';
                         }).join('');
