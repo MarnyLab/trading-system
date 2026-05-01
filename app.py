@@ -2404,6 +2404,7 @@ def portfolio_sok_ticker():
     q_str = request.args.get("q", "").strip()
     if len(q_str) < 2:
         return jsonify([])
+    # Försök 1: yf.Search
     try:
         search = yf.Search(q_str, max_results=8, news_count=0)
         resultat = []
@@ -2416,9 +2417,29 @@ def portfolio_sok_ticker():
                 "namn": t.get("longname") or t.get("shortname") or symbol,
                 "typ": t.get("quoteType", "")
             })
+        if resultat:
+            return jsonify(resultat[:6])
+    except Exception as e:
+        print(f"yf.Search-fel: {e}")
+    # Försök 2: curl_cffi direkt mot Yahoo API
+    try:
+        from curl_cffi import requests as curl_req
+        url = f"https://query1.finance.yahoo.com/v1/finance/search?q={q_str}&lang=en-US&region=SE&quotesCount=8&newsCount=0"
+        r = curl_req.get(url, impersonate="chrome110", timeout=8)
+        data = r.json()
+        resultat = []
+        for t in data.get("quotes", []):
+            symbol = t.get("symbol", "")
+            if not symbol:
+                continue
+            resultat.append({
+                "ticker": symbol,
+                "namn": t.get("longname") or t.get("shortname") or symbol,
+                "typ": t.get("quoteType", "")
+            })
         return jsonify(resultat[:6])
     except Exception as e:
-        print(f"Sök-fel: {e}")
+        print(f"curl_cffi-fel: {e}")
         return jsonify([])
 
 
