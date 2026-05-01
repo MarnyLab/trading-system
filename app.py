@@ -2185,7 +2185,7 @@ def portfolio_vy(portfolio_id):
                 <td>{{ "%.2f"|format(h.antal) }}</td>
                 <td>{{ "%.2f"|format(h.kurs) }}</td>
                 <td>{{ "{:,.0f}".format(h.mv).replace(",", " ") }}</td>
-                <td>{{ "{:,.0f}".format(h.cost_basis).replace(",", " ") }}</td>
+                <td>{{ "{:,.0f}".format(h.anskaffning).replace(",", " ") }}</td>
                 <td class="{{ 'pos' if h.unrealized > 0 else 'neg' }}">{{ "{:,.0f}".format(h.unrealized).replace(",", " ") }}</td>
                 <td class="{{ 'pos' if h.unrealized_pct > 0 else 'neg' }}">{{ "%+.1f"|format(h.unrealized_pct) }}%</td>
                 <td class="{{ 'pos' if h.daily_change > 0 else 'neg' }}">{{ "%+.1f"|format(h.daily_change) }}%</td>
@@ -2312,6 +2312,7 @@ def portfolio_vy(portfolio_id):
                             '<strong>' + d.ticker + '</strong> – ' + d.namn +
                             ' <span style="color:#888;font-size:0.8em;">(' + d.typ + ')</span></div>';
                         }).join('');
+                        });
             }, 350);
         });
         function selectTicker(ticker, namn, typ) {
@@ -2373,91 +2374,15 @@ def portfolio_ny():
 
 
 
-@app.route("/portfolio/ny-sida")
-@inloggning_kravs
-def portfolio_ny_sida():
-    conn, db_type = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT id, namn FROM portfoljer ORDER BY id")
-    existing = [{"id": r[0], "namn": r[1]} for r in c.fetchall()]
-    conn.close()
-
-    html = """<!DOCTYPE html><html>
-    <head><title>Ny portfölj</title><meta charset="utf-8">""" + BASE_STYLE + PORTFOLIO_STYLE + """
-    </head><body>""" + NAV_HTML + """
-        <h1>Skapa ny portfölj</h1>
-        <div class="ny-innehav-form" style="max-width:520px;">
-            <form method="POST" action="/portfolio/ny">
-                <div class="fg" style="margin-bottom:12px;">
-                    <label>Portföljnamn</label>
-                    <input type="text" name="namn" placeholder="t.ex. Bred depå, ISK, Pension" required>
-                </div>
-                <div class="fg" style="margin-bottom:12px;">
-                    <label>Typ</label>
-                    <select name="niva">
-                        <option value="Depå">Depå</option>
-                        <option value="ISK">ISK</option>
-                        <option value="Pension">Pension</option>
-                        <option value="KF">Kapitalförsäkring</option>
-                        <option value="Total">Sammanslagen (välj nedan)</option>
-                    </select>
-                </div>
-                {% if existing %}
-                <div class="fg" style="margin-bottom:16px;">
-                    <label>Slå ihop existing portföljer (valfritt)</label>
-                    {% for p in existing %}
-                    <div style="margin-top:8px; display:flex; align-items:center; gap:10px;">
-                        <input type="checkbox" name="merge_with" value="{{ p.id }}" id="p{{ p.id }}" style="width:18px; height:18px; accent-color:#1F3864;">
-                        <label for="p{{ p.id }}" style="display:inline; font-weight:normal; color:#333; font-size:0.95em;">{{ p.namn }}</label>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% endif %}
-                <button type="submit" style="padding:9px 24px; background:#1F3864; color:#fff; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">Skapa portfölj</button>
-            </form>
-        </div>
-    </body></html>"""
-    return render_template_string(html, existing=existing)
-
-
-
-@app.route("/portfolio/ny", methods=["POST"])
-@inloggning_kravs
-def portfolio_ny():
-    namn = request.form.get("namn", "").strip()
-    niva = request.form.get("niva", "Depå")
-    merge_with = request.form.getlist("merge_with")
-    if not namn:
-        return redirect(url_for("portfolio_ny_sida"))
-    conn, db_type = get_conn()
-    c = conn.cursor()
-    c.execute(q("INSERT INTO portfoljer (namn, niva, skapad) VALUES (?,?,?)", db_type),
-              (namn, niva, datetime.now().strftime("%Y-%m-%d %H:%M")))
-    if db_type == "postgres":
-        c.execute("SELECT lastval()")
-    else:
-        c.execute("SELECT last_insert_rowid()")
-    new_id = c.fetchone()[0]
-    # Spara sammanslagningar
-    for del_id in merge_with:
-        c.execute(q("INSERT INTO portfolj_sammanslagning (total_portfolj_id, del_portfolj_id) VALUES (?,?)", db_type),
-                  (new_id, int(del_id)))
-    conn.commit()
-    conn.close()
-    return redirect(url_for("portfolio_vy", portfolio_id=new_id))
-
-
-
-
 @app.route("/portfolio/<int:portfolio_id>/ta-bort/<int:holding_id>", methods=["POST"])
 @inloggning_kravs
 def portfolio_ta_bort_innehav(portfolio_id, holding_id):
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute(q("DELETE FROM portfolj_innehav WHERE id=? AND portfolj_id=?", db_type), (holding_id, portfolio_id))
+    c.execute(q("DELETE FROM innehav WHERE id=? AND portfolj_id=?", db_type), (holding_id, portfolio_id))
     conn.commit()
     conn.close()
-    return redirect(url_for("portfolio_detalj", portfolio_id=portfolio_id))
+    return redirect(url_for("portfolio_vy", portfolio_id=portfolio_id))
 
 
 @app.route("/portfolio/<int:portfolio_id>/ta-bort-portfolj", methods=["POST"])
@@ -2574,11 +2499,16 @@ def portfolio_innehav_detalj(holding_id):
     html = """<!DOCTYPE html><html>
     <head><title>{{ namn }}</title><meta charset="utf-8">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>""" + BASE_STYLE + PORTFOLIO_STYLE + """
+    <style>.modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;justify-content:center;align-items:center;}.modal.visa{display:flex;}.modal-box{background:#fff;border-radius:10px;padding:28px;width:420px;max-width:95vw;}.modal-box h3{font-size:1.1em;margin-bottom:16px;color:#1F3864;}</style>
     </head><body>""" + NAV_HTML + """
         <div style="margin-bottom:14px;">
             <a href="/portfolio/{{ portfolio_id }}" style="color:#1F3864; font-size:0.88em;">← Tillbaka till portfölj</a>
         </div>
-        <h1>{{ namn }} <span style="color:#888; font-size:0.7em; font-weight:normal;">{{ ticker }}</span></h1>
+        <div style="display:flex; align-items:center; gap:14px; margin-bottom:4px;">
+            <h1 style="margin:0;">{{ namn }} <span style="color:#888; font-size:0.7em; font-weight:normal;">{{ ticker }}</span></h1>
+            <button onclick="document.getElementById('modal-ticker').classList.add('visa')"
+                style="padding:4px 12px; background:#eee; border:1px solid #ccc; border-radius:5px; cursor:pointer; font-size:0.8em; white-space:nowrap;">Redigera ticker</button>
+        </div>
         <div class="kpi-rad" style="margin-top:14px;">
             <div class="kpi-box"><div class="etikett">Aktuell kurs</div><div class="varde">{{ "%.2f"|format(kurs_nu) }} {{ valuta }}</div></div>
             <div class="kpi-box"><div class="etikett">Antal</div><div class="varde">{{ "%.3f"|format(tot_antal) }}</div></div>
@@ -2612,6 +2542,25 @@ def portfolio_innehav_detalj(holding_id):
             </table>
         </div>
 
+        <!-- Modal: Redigera ticker -->
+        <div id="modal-ticker" class="modal" onclick="if(event.target===this)this.classList.remove('visa')">
+            <div class="modal-box">
+                <h3>Redigera Yahoo Finance-ticker</h3>
+                <p style="color:#666; font-size:0.85em; margin-bottom:14px;">Ange korrekt Yahoo Finance-ticker (t.ex. ASTRA.ST, AAPL, SWED-A.ST)</p>
+                <form method="POST" action="/portfolio/innehav/{{ holding_id }}/redigera-ticker">
+                    <div class="fg" style="margin-bottom:14px;">
+                        <label>Ticker</label>
+                        <input type="text" name="ticker" value="{{ ticker }}" required style="text-transform:uppercase;">
+                    </div>
+                    <div style="display:flex; gap:10px;">
+                        <button type="submit" style="padding:9px 22px; background:#1F3864; color:#fff; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">Spara</button>
+                        <button type="button" onclick="document.getElementById('modal-ticker').classList.remove('visa')"
+                            style="padding:9px 18px; background:#eee; border:none; border-radius:6px; cursor:pointer;">Avbryt</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <script>
         new Chart(document.getElementById('kursgraf').getContext('2d'), {
             type: 'line',
@@ -2639,6 +2588,7 @@ def portfolio_innehav_detalj(holding_id):
 
     return render_template_string(html,
         namn=namn, ticker=ticker, valuta=valuta, portfolio_id=portfolio_id,
+        holding_id=holding_id,
         kurs_nu=kurs_nu, tot_antal=tot_antal, avg_price=avg_price,
         mv=mv, unrealized=unrealized, unrealized_pct=unrealized_pct,
         transaktioner=transaktioner,
@@ -2652,7 +2602,7 @@ def portfolio_innehav_detalj(holding_id):
 def innehav_ta_bort(holding_id):
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute(q("SELECT portfolio_id FROM innehav WHERE id=?", db_type), (holding_id,))
+    c.execute(q("SELECT portfolj_id FROM innehav WHERE id=?", db_type), (holding_id,))
     rad = c.fetchone()
     portfolio_id = rad[0] if rad else 1
     c.execute(q("DELETE FROM transaktioner WHERE innehav_id=?", db_type), (holding_id,))
@@ -2660,6 +2610,18 @@ def innehav_ta_bort(holding_id):
     conn.commit()
     conn.close()
     return redirect(url_for("portfolio_vy", portfolio_id=portfolio_id))
+
+
+@app.route("/portfolio/innehav/<int:holding_id>/redigera-ticker", methods=["POST"])
+@inloggning_kravs
+def innehav_redigera_ticker(holding_id):
+    ticker = request.form.get("ticker", "").strip().upper()
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute(q("UPDATE innehav SET ticker=? WHERE id=?", db_type), (ticker, holding_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("portfolio_innehav_detalj", holding_id=holding_id))
 
 
 @app.route("/portfolio/innehav/<int:holding_id>/transaktion", methods=["POST"])
@@ -2674,7 +2636,7 @@ def innehav_transaktion(holding_id):
 
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute(q("SELECT portfolio_id, valuta FROM innehav WHERE id=?", db_type), (holding_id,))
+    c.execute(q("SELECT portfolj_id, valuta FROM innehav WHERE id=?", db_type), (holding_id,))
     rad = c.fetchone()
     portfolio_id = rad[0] if rad else 1
     valuta = rad[1] if rad else "SEK"
