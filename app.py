@@ -2372,141 +2372,79 @@ def portfolio_ny():
     return redirect(url_for("portfolio_vy", portfolio_id=new_id))
 
 
-@app.route("/portfolio/<int:portfolio_id>")
+
+@app.route("/portfolio/ny-sida")
 @inloggning_kravs
-def portfolio_detalj(portfolio_id):
+def portfolio_ny_sida():
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute(q("SELECT namn, niva, skapad FROM portfoljer WHERE id=?", db_type), (portfolio_id,))
-    prad = c.fetchone()
-    if not prad:
-        conn.close()
-        return "Portfölj hittades inte", 404
-    c.execute(q("SELECT id, ticker, namn, andel FROM portfolj_innehav WHERE portfolj_id=? ORDER BY andel DESC", db_type), (portfolio_id,))
-    hrader = c.fetchall()
+    c.execute("SELECT id, namn FROM portfoljer ORDER BY id")
+    existing = [{"id": r[0], "namn": r[1]} for r in c.fetchall()]
     conn.close()
 
-    innehav = []
-    total_daily_change = 0.0
-    total_andel  = sum(r[3] for r in hrader)
-    for hid, ticker, namn_h, andel in hrader:
-        kurs, daily_change = hamta_portfolj_kurs(ticker)
-        vikt = andel / total_andel if total_andel else 0
-        if daily_change is not None:
-            total_daily_change += daily_change * vikt
-        innehav.append({"id": hid, "ticker": ticker, "namn": namn_h,
-                         "andel": andel, "kurs": kurs, "daily_change": daily_change})
-
-    portfolj_namn, niva, skapad = prad
-    farv = NIVA_FARGER.get(niva, "#888")
-
-    # Pie chart för allokering
-    pie_html = ""
-    if innehav:
-        fig = go.Figure(go.Pie(
-            labels=[h["namn"] or h["ticker"] for h in innehav],
-            values=[h["andel"] for h in innehav],
-            hole=0.45,
-            textinfo="label+percent",
-            marker=dict(colors=["#0044cc","#007700","#cc5500","#884488","#886600",
-                                  "#008888","#cc0000","#445588","#558844","#885544"])
-        ))
-        fig.update_layout(
-            paper_bgcolor="#ffffff", height=300, margin=dict(l=10,r=10,t=20,b=10),
-            showlegend=False
-        )
-        pie_html = fig.to_html(full_html=False, include_plotlyjs="cdn")
-
     html = """<!DOCTYPE html><html>
-    <head><title>{{ pnamn }}</title><meta charset="utf-8">""" + BASE_STYLE + """
-    <style>
-        .niva-badge { display:inline-block; padding:3px 12px; border-radius:12px; font-size:0.82em; font-weight:bold; color:#fff; }
-        .top-info { display:flex; gap:16px; align-items:center; margin-bottom:24px; flex-wrap:wrap; }
-        .daily_change-total { font-size:1.6em; font-weight:bold; }
-        .innehav-form { background:#fff; border-radius:10px; padding:20px; border:1px solid #ddd; max-width:560px; margin-bottom:24px; }
-        .fg { margin-bottom:12px; }
-        .fg label { display:block; color:#888; font-size:0.82em; font-weight:bold; margin-bottom:4px; }
-        .fg input { width:100%; padding:9px 12px; border:1px solid #ccc; border-radius:6px; font-size:0.95em; }
-        .row3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
-        .pie-wrap { background:#fff; border-radius:10px; padding:16px; border:1px solid #ddd; max-width:360px; }
-        .layout { display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start; }
-    </style></head>
-    <body>""" + NAV_HTML + """
-        <a href="/portfolio" style="color:#888; font-size:0.88em;">← Alla portföljer</a>
-        <div class="top-info" style="margin-top:14px;">
-            <div>
-                <h1 style="margin-bottom:4px;">{{ pnamn }}</h1>
-                <span class="niva-badge" style="background:{{ farv }};">{{ niva }}</span>
-            </div>
-            {% if innehav %}
-            <div style="margin-left:auto; text-align:right;">
-                <div style="color:#888; font-size:0.82em;">Daglig portföljförändring (vägd)</div>
-                <div class="daily_change-total" style="color:{{ '#007700' if total_daily_change >= 0 else '#cc0000' }}">
-                    {{ "%+.2f"|format(total_daily_change) }}%
+    <head><title>Ny portfölj</title><meta charset="utf-8">""" + BASE_STYLE + PORTFOLIO_STYLE + """
+    </head><body>""" + NAV_HTML + """
+        <h1>Skapa ny portfölj</h1>
+        <div class="ny-innehav-form" style="max-width:520px;">
+            <form method="POST" action="/portfolio/ny">
+                <div class="fg" style="margin-bottom:12px;">
+                    <label>Portföljnamn</label>
+                    <input type="text" name="namn" placeholder="t.ex. Bred depå, ISK, Pension" required>
                 </div>
-            </div>
-            {% endif %}
-        </div>
-
-        <div class="layout">
-            <div style="flex:1; min-width:300px;">
-                <div class="innehav-form">
-                    <h2 style="font-size:1em; color:#444; margin-bottom:14px;">+ Lägg till innehav</h2>
-                    <form method="POST" action="/portfolio/{{ pid }}/lagg-till">
-                        <div class="row3">
-                            <div class="fg"><label>Ticker</label><input type="text" name="ticker" placeholder="t.ex. XACT" required></div>
-                            <div class="fg"><label>Namn/Beskrivning</label><input type="text" name="namn" placeholder="t.ex. XACT OMX"></div>
-                            <div class="fg"><label>Andel (%)</label><input type="number" step="0.1" name="andel" placeholder="25" required></div>
-                        </div>
-                        <button type="submit" style="padding:8px 20px; background:#0044cc; color:#fff; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">Lägg till</button>
-                    </form>
+                <div class="fg" style="margin-bottom:12px;">
+                    <label>Typ</label>
+                    <select name="niva">
+                        <option value="Depå">Depå</option>
+                        <option value="ISK">ISK</option>
+                        <option value="Pension">Pension</option>
+                        <option value="KF">Kapitalförsäkring</option>
+                        <option value="Total">Sammanslagen (välj nedan)</option>
+                    </select>
                 </div>
-                {% if innehav %}
-                <table class="tabell">
-                    <thead><tr><th>Ticker</th><th>Namn</th><th>Andel</th><th>Kurs</th><th>Daglig %</th><th></th></tr></thead>
-                    <tbody>
-                    {% for h in innehav %}
-                    <tr>
-                        <td><strong>{{ h.ticker }}</strong></td>
-                        <td>{{ h.namn }}</td>
-                        <td>{{ "%.1f"|format(h.andel) }}%</td>
-                        <td>{% if h.kurs %}{{ "%.2f"|format(h.kurs) }}{% else %}<span style="color:#aaa;">–</span>{% endif %}</td>
-                        <td>{% if h.daily_change is not none %}
-                            <span style="color:{{ '#007700' if h.daily_change >= 0 else '#cc0000' }}">{{ "%+.2f"|format(h.daily_change) }}%</span>
-                            {% else %}<span style="color:#aaa;">–</span>{% endif %}
-                        </td>
-                        <td>
-                            <form method="POST" action="/portfolio/{{ pid }}/ta-bort/{{ h.id }}" style="display:inline;">
-                                <button type="submit" style="background:none; border:none; color:#cc0000; cursor:pointer; font-size:0.85em;">✕</button>
-                            </form>
-                        </td>
-                    </tr>
+                {% if existing %}
+                <div class="fg" style="margin-bottom:16px;">
+                    <label>Slå ihop existing portföljer (valfritt)</label>
+                    {% for p in existing %}
+                    <div style="margin-top:8px; display:flex; align-items:center; gap:10px;">
+                        <input type="checkbox" name="merge_with" value="{{ p.id }}" id="p{{ p.id }}" style="width:18px; height:18px; accent-color:#1F3864;">
+                        <label for="p{{ p.id }}" style="display:inline; font-weight:normal; color:#333; font-size:0.95em;">{{ p.namn }}</label>
+                    </div>
                     {% endfor %}
-                    </tbody>
-                </table>
-                {% else %}
-                <p style="color:#888;">Inga innehav ännu. Lägg till ovan.</p>
+                </div>
                 {% endif %}
-            </div>
-            {% if pie_html %}
-            <div class="pie-wrap">
-                <div style="font-size:0.85em; color:#666; font-weight:bold; margin-bottom:8px;">ALLOKERING</div>
-                {{ pie_html|safe }}
-            </div>
-            {% endif %}
-        </div>
-
-        <div style="margin-top:20px;">
-            <form method="POST" action="/portfolio/{{ pid }}/ta-bort-portfolj"
-                  onsubmit="return confirm('Ta bort hela portföljen?');">
-                <button type="submit" style="padding:7px 16px; background:#f0f0f0; color:#cc0000; border:1px solid #ddd; border-radius:6px; font-size:0.85em; cursor:pointer;">Ta bort portfölj</button>
+                <button type="submit" style="padding:9px 24px; background:#1F3864; color:#fff; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">Skapa portfölj</button>
             </form>
         </div>
     </body></html>"""
-    return render_template_string(html, pnamn=portfolj_namn, niva=niva, farv=farv,
-                                  pid=portfolio_id, innehav=innehav,
-                                  total_daily_change=total_daily_change, pie_html=pie_html)
+    return render_template_string(html, existing=existing)
 
+
+
+@app.route("/portfolio/ny", methods=["POST"])
+@inloggning_kravs
+def portfolio_ny():
+    namn = request.form.get("namn", "").strip()
+    niva = request.form.get("niva", "Depå")
+    merge_with = request.form.getlist("merge_with")
+    if not namn:
+        return redirect(url_for("portfolio_ny_sida"))
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute(q("INSERT INTO portfoljer (namn, niva, skapad) VALUES (?,?,?)", db_type),
+              (namn, niva, datetime.now().strftime("%Y-%m-%d %H:%M")))
+    if db_type == "postgres":
+        c.execute("SELECT lastval()")
+    else:
+        c.execute("SELECT last_insert_rowid()")
+    new_id = c.fetchone()[0]
+    # Spara sammanslagningar
+    for del_id in merge_with:
+        c.execute(q("INSERT INTO portfolj_sammanslagning (total_portfolj_id, del_portfolj_id) VALUES (?,?)", db_type),
+                  (new_id, int(del_id)))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("portfolio_vy", portfolio_id=new_id))
 
 
 
