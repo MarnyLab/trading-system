@@ -2073,6 +2073,33 @@ def portfolio_vy(portfolio_id):
     conn.close()
 
     # Live-kurser och beräkningar
+    # Batch-hämta alla kurser i ett enda anrop
+    tickers = [r[2] for r in innehav_rader]
+    kurs_map = {}
+    if tickers:
+        try:
+            df_all = yf.download(" ".join(tickers), period="5d", interval="1d",
+                                  progress=False, auto_adjust=True, group_by="ticker")
+            if len(tickers) == 1:
+                t = tickers[0]
+                closes = df_all["Close"].dropna()
+                if len(closes) >= 2:
+                    kurs_map[t] = (float(closes.iloc[-1]), (float(closes.iloc[-1]) - float(closes.iloc[-2])) / float(closes.iloc[-2]) * 100)
+                elif len(closes) == 1:
+                    kurs_map[t] = (float(closes.iloc[-1]), 0.0)
+            else:
+                for t in tickers:
+                    try:
+                        closes = df_all[t]["Close"].dropna()
+                        if len(closes) >= 2:
+                            kurs_map[t] = (float(closes.iloc[-1]), (float(closes.iloc[-1]) - float(closes.iloc[-2])) / float(closes.iloc[-2]) * 100)
+                        elif len(closes) == 1:
+                            kurs_map[t] = (float(closes.iloc[-1]), 0.0)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     innehav = []
     total_mv = 0
     total_cost = 0
@@ -2083,18 +2110,18 @@ def portfolio_vy(portfolio_id):
         iid, namn, ticker, tillgangsslag, valuta, pid, antal, cost_basis = r
         antal = float(antal or 0)
         cost_basis = float(cost_basis or 0)
-        kurs, daily_change = hamta_portfolj_kurs(ticker)
-        mv = round(antal * (kurs or 0), 0)
+        kurs, daily_change = kurs_map.get(ticker, (0, 0))
+        mv = round(antal * kurs, 0)
         unrealized = round(mv - cost_basis, 0) if mv else 0
         unrealized_pct = round(unrealized / cost_basis * 100, 1) if cost_basis else 0
 
         innehav.append({
             "id": iid, "namn": namn, "ticker": ticker,
             "tillgangsslag": tillgangsslag, "valuta": valuta,
-            "antal": antal, "kurs": kurs or 0,
+            "antal": antal, "kurs": kurs,
             "mv": mv, "anskaffning": round(cost_basis, 0),
             "unrealized": unrealized, "unrealized_pct": unrealized_pct,
-            "daily_change": daily_change or 0, "portfolj_id": pid
+            "daily_change": daily_change, "portfolj_id": pid
         })
         total_mv += mv
         total_cost += cost_basis
