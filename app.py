@@ -122,7 +122,7 @@ def init_db():
             portfolio_id INTEGER NOT NULL,
             namn TEXT NOT NULL,
             ticker TEXT NOT NULL,
-            asset_type TEXT NOT NULL,
+            tillgangsslag TEXT NOT NULL,
             valuta TEXT DEFAULT 'SEK',
             skapad TEXT NOT NULL
         )
@@ -2060,13 +2060,13 @@ def portfolio_vy(portfolio_id):
 
     # Hämta innehav
     placeholders = ",".join(["%s" if db_type == "postgres" else "?" for _ in portfolio_ids])
-    c.execute(f"""SELECT i.id, i.namn, i.ticker, i.asset_type, i.valuta, i.portfolj_id,
+    c.execute(f"""SELECT i.id, i.namn, i.ticker, i.tillgangsslag, i.valuta, i.portfolj_id,
                SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) as antal,
                SUM(CASE WHEN t.typ='KOP' THEN t.antal*t.kurs WHEN t.typ='SALJ' THEN -t.antal*t.kurs ELSE 0 END) as cost_basis
                FROM innehav i
                LEFT JOIN transaktioner t ON t.innehav_id=i.id
                WHERE i.portfolj_id IN ({placeholders})
-               GROUP BY i.id, i.namn, i.ticker, i.asset_type, i.valuta, i.portfolj_id
+               GROUP BY i.id, i.namn, i.ticker, i.tillgangsslag, i.valuta, i.portfolj_id
                HAVING SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) > 0""",
                portfolio_ids)
     innehav_rader = c.fetchall()
@@ -2080,7 +2080,7 @@ def portfolio_vy(portfolio_id):
     currency_data = {}
 
     for r in innehav_rader:
-        iid, namn, ticker, asset_type, valuta, pid, antal, cost_basis = r
+        iid, namn, ticker, tillgangsslag, valuta, pid, antal, cost_basis = r
         antal = float(antal or 0)
         cost_basis = float(cost_basis or 0)
         kurs, daily_change = hamta_portfolj_kurs(ticker)
@@ -2090,9 +2090,9 @@ def portfolio_vy(portfolio_id):
 
         innehav.append({
             "id": iid, "namn": namn, "ticker": ticker,
-            "asset_type": asset_type, "valuta": valuta,
+            "tillgangsslag": asset_type, "valuta": valuta,
             "antal": antal, "kurs": kurs or 0,
-            "mv": mv, "cost_basis": round(cost_basis, 0),
+            "mv": mv, "anskaffning": round(cost_basis, 0),
             "unrealized": unrealized, "unrealized_pct": unrealized_pct,
             "daily_change": daily_change or 0, "portfolj_id": pid
         })
@@ -2232,7 +2232,7 @@ def portfolio_vy(portfolio_id):
                         <div class="fg"><label>Namn</label><input type="text" name="namn" id="f-namn" required></div>
                         <div class="fg"><label>Yahoo Ticker</label><input type="text" name="ticker" id="f-ticker" required></div>
                         <div class="fg"><label>Typ</label>
-                            <select name="asset_type" id="f-typ">
+                            <select name="tillgangsslag" id="f-typ">
                                 <option>Aktie</option><option>ETF</option><option>Fond</option>
                                 <option>Råvara</option><option>Obligation</option><option>Kassa</option>
                             </select>
@@ -2565,7 +2565,7 @@ def portfolio_sok_ticker():
 def portfolio_lagg_till(portfolio_id):
     namn        = request.form.get("namn", "").strip()
     ticker      = request.form.get("ticker", "").strip().upper()
-    asset_type = request.form.get("asset_type", "Aktie")
+    asset_type = request.form.get("tillgangsslag", "Aktie")
     valuta      = request.form.get("valuta", "SEK")
     antal       = float(request.form.get("antal", 0))
     kurs        = float(request.form.get("kurs", 0))
@@ -2602,7 +2602,7 @@ def portfolio_lagg_till(portfolio_id):
 def portfolio_innehav_detalj(holding_id):
     conn, db_type = get_conn()
     c = conn.cursor()
-    c.execute(q("SELECT i.id, i.namn, i.ticker, i.asset_type, i.valuta, i.portfolj_id FROM innehav i WHERE i.id=?", db_type), (holding_id,))
+    c.execute(q("SELECT i.id, i.namn, i.ticker, i.tillgangsslag, i.valuta, i.portfolj_id FROM innehav i WHERE i.id=?", db_type), (holding_id,))
     rad = c.fetchone()
     if not rad:
         conn.close()
@@ -2772,7 +2772,7 @@ def portfolio_importera_excel(portfolio_id):
     try:
         import io
         df = pd.read_excel(fil, sheet_name="Innehav", header=2)
-        df.columns = ["depa","namn","antal","kurs","valuta","fx","mv","cost_basis","unrealized","unrealized_pct","andel","asset_type"]
+        df.columns = ["depa","namn","antal","kurs","valuta","fx","mv","anskaffning","unrealized","unrealized_pct","andel","tillgangsslag"]
         df = df.dropna(subset=["namn","antal","kurs"])
         conn, db_type = get_conn()
         c = conn.cursor()
@@ -2784,8 +2784,8 @@ def portfolio_importera_excel(portfolio_id):
             antal = float(row["antal"]) if pd.notna(row["antal"]) else 0
             kurs = float(row["kurs"]) if pd.notna(row["kurs"]) else 0
             valuta = str(row["valuta"]).strip() if pd.notna(row["valuta"]) else "SEK"
-            cost_basis = float(row["cost_basis"]) if pd.notna(row["cost_basis"]) else antal * kurs
-            asset_type = str(row["asset_type"]).strip() if pd.notna(row["asset_type"]) else "Aktie"
+            cost_basis = float(row["anskaffning"]) if pd.notna(row["anskaffning"]) else antal * kurs
+            asset_type = str(row["tillgangsslag"]).strip() if pd.notna(row["tillgangsslag"]) else "Aktie"
             # Förenkla asset_type
             if "fond" in asset_type.lower(): asset_type = "Fond"
             elif "etf" in asset_type.lower() or "råvara" in asset_type.lower(): asset_type = "ETF"
