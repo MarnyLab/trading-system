@@ -2405,21 +2405,20 @@ def portfolio_sok_ticker():
     if len(q_str) < 2:
         return jsonify([])
     try:
-        import requests as _req
-        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={q_str}&lang=en-US&region=SE&quotesCount=8&newsCount=0"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = _req.get(url, headers=headers, timeout=5)
-        data = r.json()
+        search = yf.Search(q_str, max_results=8, news_count=0)
         resultat = []
-        for t in data.get("quotes", []):
-            if t.get("symbol"):
-                resultat.append({
-                    "ticker": t.get("symbol", ""),
-                    "namn": t.get("longname") or t.get("shortname", t.get("symbol", "")),
-                    "typ": t.get("quoteType", "")
-                })
+        for t in search.quotes:
+            symbol = t.get("symbol", "")
+            if not symbol:
+                continue
+            resultat.append({
+                "ticker": symbol,
+                "namn": t.get("longname") or t.get("shortname") or symbol,
+                "typ": t.get("quoteType", "")
+            })
         return jsonify(resultat[:6])
     except Exception as e:
+        print(f"Sök-fel: {e}")
         return jsonify([])
 
 
