@@ -2227,14 +2227,14 @@ def portfolio_vy(portfolio_id):
                 <button class="period-btn" onclick="setPeriod('10y',this)">10Å</button>
             </div>
             <div id="port-laddning" style="text-align:center; color:#888; font-size:0.85em; padding:20px 0; display:none;">Hämtar data...</div>
-            <canvas id="portgraf" height="90"></canvas>
+            <canvas id="portgraf" height="200"></canvas>
         </div>
 
-        <!-- 3-kolumners rad: Top3/Bot3 | Tillgångsslag | Valuta -->
-        <div style="display:grid; grid-template-columns:1fr 200px 200px; gap:12px; margin-bottom:20px; align-items:start;">
+        <!-- 4-kolumners rad: [Bäst&Sämst span2] [Tillgångsslag] [Valuta] -->
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:12px; margin-bottom:20px; align-items:start;">
 
-            <!-- Kolumn 1: Bäst & Sämst -->
-            <div>
+            <!-- Kolumn 1-2 (span 2): Bäst & Sämst -->
+            <div style="grid-column: span 2;">
                 <div class="tb-header" style="border-radius:8px 8px 0 0; display:flex; justify-content:space-between; align-items:center;">
                     <span>Bäst &amp; Sämst</span>
                     <div style="display:flex; gap:4px;">
@@ -2244,7 +2244,7 @@ def portfolio_vy(portfolio_id):
                         <button class="tb-period" onclick="setBSPeriod('1y',this)">År</button>
                     </div>
                 </div>
-                <div style="background:#fff; border:1px solid #eee; border-top:none; border-radius:0 0 8px 8px; padding:12px;">
+                <div style="background:#fff; border:1px solid #eee; border-top:none; border-radius:0 0 8px 8px; padding:12px; min-height:120px;">
                     <div id="bs-laddning" style="text-align:center; color:#888; font-size:0.83em; padding:10px 0;">Hämtar data...</div>
                     <div id="bs-innehall" style="display:none; grid-template-columns:1fr 1fr; gap:12px;">
                         <div>
@@ -2259,36 +2259,36 @@ def portfolio_vy(portfolio_id):
                 </div>
             </div>
 
-            <!-- Kolumn 2: Tillgångsslag -->
-            <div class="chart-box" style="max-width:200px;">
+            <!-- Kolumn 3: Tillgångsslag -->
+            <div class="chart-box">
                 <h3>Tillgångsslag</h3>
-                <canvas id="donut1" height="120"></canvas>
-                <div style="margin-top:8px;">
+                <div style="display:flex; justify-content:center; margin-bottom:8px;">
+                    <canvas id="donut1" width="100" height="100" style="max-width:100px;"></canvas>
+                </div>
                 {% set at_colors = ['#1F3864','#2E5FA3','#4472C4','#9DC3E6','#D9E2F3','#A9C4E4','#6FA8DC','#3D6FA6'] %}
                 {% for key, val in asset_type_data.items() %}
-                <div style="display:flex; align-items:center; gap:5px; margin-bottom:3px;">
-                    <div style="width:8px; height:8px; border-radius:50%; background:{{ at_colors[loop.index0 % 8] }}; flex-shrink:0;"></div>
-                    <span style="font-size:12px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ key }}</span>
-                    <span style="font-size:12px; color:#555; font-weight:bold;">{{ "%.0f"|format(val / total_mv * 100) if total_mv else 0 }}%</span>
+                <div style="display:flex; align-items:center; gap:4px; margin-bottom:2px;">
+                    <div style="width:7px; height:7px; border-radius:50%; background:{{ at_colors[loop.index0 % 8] }}; flex-shrink:0;"></div>
+                    <span style="font-size:11px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#333;">{{ key }}</span>
+                    <span style="font-size:11px; color:#444; font-weight:bold;">{{ "%.0f"|format(val / total_mv * 100) if total_mv else 0 }}%</span>
                 </div>
                 {% endfor %}
-                </div>
             </div>
 
-            <!-- Kolumn 3: Valuta -->
-            <div class="chart-box" style="max-width:200px;">
+            <!-- Kolumn 4: Valutaexponering -->
+            <div class="chart-box">
                 <h3>Valutaexponering</h3>
-                <canvas id="donut2" height="120"></canvas>
-                <div style="margin-top:8px;">
+                <div style="display:flex; justify-content:center; margin-bottom:8px;">
+                    <canvas id="donut2" width="100" height="100" style="max-width:100px;"></canvas>
+                </div>
                 {% set fx_colors = ['#1F3864','#4472C4','#9DC3E6','#D9E2F3','#6FA8DC','#3D6FA6'] %}
                 {% for key, val in currency_data.items() %}
-                <div style="display:flex; align-items:center; gap:5px; margin-bottom:3px;">
-                    <div style="width:8px; height:8px; border-radius:50%; background:{{ fx_colors[loop.index0 % 6] }}; flex-shrink:0;"></div>
-                    <span style="font-size:12px; flex:1;">{{ key }}</span>
-                    <span style="font-size:12px; color:#555; font-weight:bold;">{{ "%.0f"|format(val / total_mv * 100) if total_mv else 0 }}%</span>
+                <div style="display:flex; align-items:center; gap:4px; margin-bottom:2px;">
+                    <div style="width:7px; height:7px; border-radius:50%; background:{{ fx_colors[loop.index0 % 6] }}; flex-shrink:0;"></div>
+                    <span style="font-size:11px; flex:1; color:#333;">{{ key }}</span>
+                    <span style="font-size:11px; color:#444; font-weight:bold;">{{ "%.0f"|format(val / total_mv * 100) if total_mv else 0 }}%</span>
                 </div>
                 {% endfor %}
-                </div>
             </div>
 
         </div>
@@ -2505,14 +2505,13 @@ def portfolio_vy(portfolio_id):
             type: 'doughnut',
             data: { labels: {{ asset_type_json|safe }}, datasets: [{ data: {{ asset_type_values|safe }},
                 backgroundColor: ['#1F3864','#2E5FA3','#4472C4','#9DC3E6','#D9E2F3','#A9C4E4','#6FA8DC','#3D6FA6'] }] },
-            options: { plugins: { legend: { position: 'bottom', labels: { font: { size: 10 } } } }, cutout: '60%' }
+            options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, cutout: '60%' }
         });
-        // Donut 2 - Valuta
         new Chart(document.getElementById('donut2').getContext('2d'), {
             type: 'doughnut',
             data: { labels: {{ currency_json|safe }}, datasets: [{ data: {{ currency_values|safe }},
                 backgroundColor: ['#1F3864','#4472C4','#9DC3E6','#D9E2F3','#6FA8DC'] }] },
-            options: { plugins: { legend: { position: 'bottom', labels: { font: { size: 10 } } } }, cutout: '60%' }
+            options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, cutout: '60%' }
         });
 
         // Sök
