@@ -36,6 +36,12 @@ app = Flask(__name__)
 app.secret_key = "trading-system-secret-2026"
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
+import traceback
+@app.errorhandler(Exception)
+def handle_exception(e):
+    print("UNHANDLED EXCEPTION:", traceback.format_exc())
+    return f"<pre>Fel: {traceback.format_exc()}</pre>", 500
+
 # ── Databas ────────────────────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 DB_PATH = "trading.db"
