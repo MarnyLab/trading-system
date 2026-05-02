@@ -2230,41 +2230,67 @@ def portfolio_vy(portfolio_id):
             <canvas id="portgraf" height="90"></canvas>
         </div>
 
-        <div class="chart-container">
-            <div class="chart-box">
-                <h3>Tillgångsslag</h3>
-                <canvas id="donut1" height="140"></canvas>
-            </div>
-            <div class="chart-box">
-                <h3>Valutaexponering</h3>
-                <canvas id="donut2" height="140"></canvas>
-            </div>
-        </div>
+        <!-- 3-kolumners rad: Top3/Bot3 | Tillgångsslag | Valuta -->
+        <div style="display:grid; grid-template-columns:1fr 200px 200px; gap:12px; margin-bottom:20px; align-items:start;">
 
-        <!-- Bäst & Sämst widget -->
-        <div style="margin-bottom:20px;">
-            <div class="tb-header" style="border-radius:8px 8px 0 0; display:flex; justify-content:space-between; align-items:center;">
-                <span>Bäst &amp; Sämst</span>
-                <div style="display:flex; gap:4px;">
-                    <button class="tb-period aktiv" onclick="setBSPeriod('1d',this)">Dag</button>
-                    <button class="tb-period" onclick="setBSPeriod('1v',this)">Vecka</button>
-                    <button class="tb-period" onclick="setBSPeriod('1m',this)">Månad</button>
-                    <button class="tb-period" onclick="setBSPeriod('1y',this)">År</button>
-                </div>
-            </div>
-            <div style="background:#fff; border:1px solid #eee; border-top:none; border-radius:0 0 8px 8px; padding:14px;">
-                <div id="bs-laddning" style="text-align:center; color:#888; font-size:0.85em; padding:12px 0;">Hämtar data...</div>
-                <div id="bs-innehall" style="display:none; display:grid; grid-template-columns:1fr 1fr; gap:16px;">
-                    <div>
-                        <div style="font-weight:bold; color:#1a7a1a; font-size:0.85em; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.04em;">▲ Top 3</div>
-                        <div id="bs-top"></div>
-                    </div>
-                    <div>
-                        <div style="font-weight:bold; color:#cc0000; font-size:0.85em; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.04em;">▼ Botten 3</div>
-                        <div id="bs-bot"></div>
+            <!-- Kolumn 1: Bäst & Sämst -->
+            <div>
+                <div class="tb-header" style="border-radius:8px 8px 0 0; display:flex; justify-content:space-between; align-items:center;">
+                    <span>Bäst &amp; Sämst</span>
+                    <div style="display:flex; gap:4px;">
+                        <button class="tb-period aktiv" onclick="setBSPeriod('1d',this)">Dag</button>
+                        <button class="tb-period" onclick="setBSPeriod('1v',this)">Vecka</button>
+                        <button class="tb-period" onclick="setBSPeriod('1m',this)">Månad</button>
+                        <button class="tb-period" onclick="setBSPeriod('1y',this)">År</button>
                     </div>
                 </div>
+                <div style="background:#fff; border:1px solid #eee; border-top:none; border-radius:0 0 8px 8px; padding:12px;">
+                    <div id="bs-laddning" style="text-align:center; color:#888; font-size:0.83em; padding:10px 0;">Hämtar data...</div>
+                    <div id="bs-innehall" style="display:none; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <div style="font-weight:bold; color:#1a7a1a; font-size:0.8em; margin-bottom:6px; text-transform:uppercase;">▲ Top 3</div>
+                            <div id="bs-top"></div>
+                        </div>
+                        <div>
+                            <div style="font-weight:bold; color:#cc0000; font-size:0.8em; margin-bottom:6px; text-transform:uppercase;">▼ Botten 3</div>
+                            <div id="bs-bot"></div>
+                        </div>
+                    </div>
+                </div>
             </div>
+
+            <!-- Kolumn 2: Tillgångsslag -->
+            <div class="chart-box" style="max-width:200px;">
+                <h3>Tillgångsslag</h3>
+                <canvas id="donut1" height="120"></canvas>
+                <div style="margin-top:8px;">
+                {% set at_colors = ['#1F3864','#2E5FA3','#4472C4','#9DC3E6','#D9E2F3','#A9C4E4','#6FA8DC','#3D6FA6'] %}
+                {% for key, val in asset_type_data.items() %}
+                <div style="display:flex; align-items:center; gap:5px; margin-bottom:3px;">
+                    <div style="width:8px; height:8px; border-radius:50%; background:{{ at_colors[loop.index0 % 8] }}; flex-shrink:0;"></div>
+                    <span style="font-size:12px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ key }}</span>
+                    <span style="font-size:12px; color:#555; font-weight:bold;">{{ "%.0f"|format(val / total_mv * 100) if total_mv else 0 }}%</span>
+                </div>
+                {% endfor %}
+                </div>
+            </div>
+
+            <!-- Kolumn 3: Valuta -->
+            <div class="chart-box" style="max-width:200px;">
+                <h3>Valutaexponering</h3>
+                <canvas id="donut2" height="120"></canvas>
+                <div style="margin-top:8px;">
+                {% set fx_colors = ['#1F3864','#4472C4','#9DC3E6','#D9E2F3','#6FA8DC','#3D6FA6'] %}
+                {% for key, val in currency_data.items() %}
+                <div style="display:flex; align-items:center; gap:5px; margin-bottom:3px;">
+                    <div style="width:8px; height:8px; border-radius:50%; background:{{ fx_colors[loop.index0 % 6] }}; flex-shrink:0;"></div>
+                    <span style="font-size:12px; flex:1;">{{ key }}</span>
+                    <span style="font-size:12px; color:#555; font-weight:bold;">{{ "%.0f"|format(val / total_mv * 100) if total_mv else 0 }}%</span>
+                </div>
+                {% endfor %}
+                </div>
+            </div>
+
         </div>
 
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -2400,7 +2426,7 @@ def portfolio_vy(portfolio_id):
             fetch('/portfolio/{{ portfolj.id }}/top-bottom?period=' + bsPeriod)
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
-                    laddEl.style.display = 'none'; innEl.style.display = 'grid';
+                    laddEl.style.display = 'none'; innEl.style.display = 'grid'; innEl.style.gridTemplateColumns = '1fr 1fr';
                     function renderRad(h) {
                         const pos = h.pct >= 0;
                         return '<div class="bs-rad">' +
@@ -2549,6 +2575,7 @@ def portfolio_vy(portfolio_id):
                                   totalt_unrealized=totalt_unrealized, total_pct=total_pct,
                                   asset_type_json=asset_type_json, asset_type_values=asset_type_values,
                                   currency_json=currency_json, currency_values=currency_values,
+                                  asset_type_data=asset_type_data, currency_data=currency_data,
                                   is_merged=is_merged, today=today)
 
 
