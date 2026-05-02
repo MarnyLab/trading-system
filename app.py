@@ -2162,12 +2162,26 @@ def portfolio_vy(portfolio_id):
         .period-btn.aktiv { background:#1F3864; color:#fff; border-color:#1F3864; }
         .period-btn:hover:not(.aktiv) { background:#d8e2f0; }
         .index-sel { padding:3px 8px; border:1px solid #ccc; border-radius:4px; font-size:0.78em; color:#333; }
+        .tb-period { padding:2px 8px; background:rgba(255,255,255,0.15); border:1px solid rgba(255,255,255,0.3); border-radius:4px; cursor:pointer; font-size:0.74em; font-weight:bold; color:#fff; }
+        .tb-period.aktiv { background:#fff; color:#1F3864; }
+        .tb-period:hover:not(.aktiv) { background:rgba(255,255,255,0.25); }
+        .bs-rad { display:flex; justify-content:space-between; align-items:center; padding:6px 8px; border-radius:5px; margin-bottom:4px; background:#f9f9f9; }
+        .bs-rad:hover { background:#f0f4ff; }
+        .bs-namn { font-size:0.85em; font-weight:bold; color:#222; }
+        .bs-ticker { font-size:0.74em; color:#888; }
     </style>
     </head><body>""" + NAV_HTML + """
 
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
             <h1>Portfölj</h1>
-            <a href="/portfolio/ny-sida" style="padding:7px 16px; background:#1F3864; color:#fff; border-radius:6px; text-decoration:none; font-size:0.88em;">+ Ny portfölj</a>
+            <div style="display:flex; gap:8px;">
+                <a href="/portfolio/ny-sida" style="padding:7px 16px; background:#1F3864; color:#fff; border-radius:6px; text-decoration:none; font-size:0.88em;">+ Ny portfölj</a>
+                {% if not is_merged %}
+                <button onclick="if(confirm('Är du säker? Portföljen och alla dess innehav tas bort permanent.')) document.getElementById('form-ta-bort-portfolj').submit();"
+                    style="padding:7px 14px; background:#fff; color:#cc0000; border:1px solid #cc0000; border-radius:6px; cursor:pointer; font-size:0.88em;">Ta bort portfölj</button>
+                <form id="form-ta-bort-portfolj" method="POST" action="/portfolio/{{ portfolj.id }}/ta-bort-portfolj" style="display:none;"></form>
+                {% endif %}
+            </div>
         </div>
 
         <div class="portfolj-tabs">
@@ -2224,6 +2238,32 @@ def portfolio_vy(portfolio_id):
             <div class="chart-box">
                 <h3>Valutaexponering</h3>
                 <canvas id="donut2" height="140"></canvas>
+            </div>
+        </div>
+
+        <!-- Bäst & Sämst widget -->
+        <div style="margin-bottom:20px;">
+            <div class="tb-header" style="border-radius:8px 8px 0 0; display:flex; justify-content:space-between; align-items:center;">
+                <span>Bäst &amp; Sämst</span>
+                <div style="display:flex; gap:4px;">
+                    <button class="tb-period aktiv" onclick="setBSPeriod('1d',this)">Dag</button>
+                    <button class="tb-period" onclick="setBSPeriod('1v',this)">Vecka</button>
+                    <button class="tb-period" onclick="setBSPeriod('1m',this)">Månad</button>
+                    <button class="tb-period" onclick="setBSPeriod('1y',this)">År</button>
+                </div>
+            </div>
+            <div style="background:#fff; border:1px solid #eee; border-top:none; border-radius:0 0 8px 8px; padding:14px;">
+                <div id="bs-laddning" style="text-align:center; color:#888; font-size:0.85em; padding:12px 0;">Hämtar data...</div>
+                <div id="bs-innehall" style="display:none; display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                    <div>
+                        <div style="font-weight:bold; color:#1a7a1a; font-size:0.85em; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.04em;">▲ Top 3</div>
+                        <div id="bs-top"></div>
+                    </div>
+                    <div>
+                        <div style="font-weight:bold; color:#cc0000; font-size:0.85em; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.04em;">▼ Botten 3</div>
+                        <div id="bs-bot"></div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -2345,6 +2385,37 @@ def portfolio_vy(portfolio_id):
         </div>
 
         <script>
+        // ── Bäst & Sämst ────────────────────────────────────
+        let bsPeriod = '1d';
+        function setBSPeriod(p, btn) {
+            bsPeriod = p;
+            document.querySelectorAll('.tb-period').forEach(b => b.classList.remove('aktiv'));
+            btn.classList.add('aktiv');
+            laddaBS();
+        }
+        function laddaBS() {
+            const laddEl = document.getElementById('bs-laddning');
+            const innEl  = document.getElementById('bs-innehall');
+            laddEl.style.display = 'block'; innEl.style.display = 'none';
+            fetch('/portfolio/{{ portfolj.id }}/top-bottom?period=' + bsPeriod)
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    laddEl.style.display = 'none'; innEl.style.display = 'grid';
+                    function renderRad(h) {
+                        const pos = h.pct >= 0;
+                        return '<div class="bs-rad">' +
+                            '<div><div class="bs-namn">' + h.namn + '</div>' +
+                            '<div class="bs-ticker">' + h.ticker + '</div></div>' +
+                            '<div style="font-weight:bold; font-size:0.9em; color:' + (pos ? '#1a7a1a' : '#cc0000') + ';">' +
+                            (pos ? '▲' : '▼') + ' ' + (pos ? '+' : '') + h.pct.toFixed(1) + '%</div></div>';
+                    }
+                    document.getElementById('bs-top').innerHTML = data.top.length ? data.top.map(renderRad).join('') : '<div style="color:#888;font-size:0.83em;padding:8px;">Ingen data</div>';
+                    document.getElementById('bs-bot').innerHTML = data.bot.length ? data.bot.map(renderRad).join('') : '<div style="color:#888;font-size:0.83em;padding:8px;">Ingen data</div>';
+                })
+                .catch(function(e) { laddEl.textContent = 'Fel vid hämtning.'; console.error(e); });
+        }
+        laddaBS();
+
         // ── Portföljutveckling ──────────────────────────────
         let portChart = null;
         let aktivPeriod = '1y';
@@ -2568,6 +2639,64 @@ def portfolio_historik(portfolio_id):
     except Exception as e:
         print(f"Historik-fel: {e}")
         return jsonify({"dates": [], "values": [], "index_values": [], "error": str(e)})
+
+
+@app.route("/portfolio/<int:portfolio_id>/top-bottom")
+@inloggning_kravs
+def portfolio_top_bottom(portfolio_id):
+    period = request.args.get("period", "1d")
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute(q("SELECT del_portfolj_id FROM portfolj_sammanslagning WHERE total_portfolj_id=?", db_type), (portfolio_id,))
+    sub_ids = [r[0] for r in c.fetchall()]
+    portfolio_ids = sub_ids if sub_ids else [portfolio_id]
+    pl = ",".join(["%s" if db_type == "postgres" else "?" for _ in portfolio_ids])
+    c.execute(f"""SELECT i.ticker, i.namn,
+               SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) as antal
+               FROM innehav i LEFT JOIN transaktioner t ON t.innehav_id=i.id
+               WHERE i.portfolj_id IN ({pl})
+               GROUP BY i.ticker, i.namn HAVING antal > 0""", portfolio_ids)
+    holdings = [{"ticker": r[0], "namn": r[1]} for r in c.fetchall()]
+    conn.close()
+
+    if not holdings:
+        return jsonify({"top": [], "bot": []})
+
+    period_cfg = {"1d": ("5d","1d"), "1v": ("1mo","1d"), "1m": ("3mo","1d"), "1y": ("1y","1d")}
+    yf_period, interval = period_cfg.get(period, ("5d","1d"))
+    lookback = {"1d": 2, "1v": 6, "1m": 23, "1y": 252}
+    n = lookback.get(period, 2)
+
+    try:
+        tickers = [h["ticker"] for h in holdings]
+        df = yf.download(tickers, period=yf_period, interval=interval,
+                          progress=False, auto_adjust=True)
+        if isinstance(df.columns, pd.MultiIndex):
+            close_df = df["Close"]
+            if isinstance(close_df, pd.Series):
+                close_df = close_df.to_frame(name=tickers[0])
+        else:
+            close_df = df[["Close"]].rename(columns={"Close": tickers[0]})
+        close_df = close_df.ffill().dropna(how="all")
+
+        namn_map = {h["ticker"]: h["namn"] for h in holdings}
+        resultat = []
+        for t in tickers:
+            if t not in close_df.columns:
+                continue
+            s = close_df[t].dropna()
+            if len(s) < 2:
+                continue
+            ref = s.iloc[-min(n, len(s))]
+            now = s.iloc[-1]
+            pct = (now - ref) / ref * 100 if ref else 0
+            resultat.append({"ticker": t, "namn": namn_map.get(t, t), "pct": round(float(pct), 2)})
+
+        resultat.sort(key=lambda x: x["pct"], reverse=True)
+        return jsonify({"top": resultat[:3], "bot": resultat[-3:][::-1]})
+    except Exception as e:
+        print(f"Top-bottom fel: {e}")
+        return jsonify({"top": [], "bot": [], "error": str(e)})
 
 
 @app.route("/portfolio/ny", methods=["POST"])
