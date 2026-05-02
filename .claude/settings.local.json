@@ -5,7 +5,12 @@
       "Bash(python -c \"import py_compile; py_compile.compile\\('app.py', doraise=True\\) or print\\('OK'\\)\")",
       "Bash(pip install *)",
       "Bash(python -c ' *)",
-      "Bash(python import_history.py)"
+      "Bash(python import_history.py)",
+      "Bash(python app.py)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5000/historik)",
+      "Bash(kill %1)",
+      "Bash(git add *)",
+      "Bash(python seed_portfolios.py)"
     ]
   }
 }
