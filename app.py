@@ -2078,27 +2078,30 @@ def portfolio_vy(portfolio_id):
     kurs_map = {}
     if tickers:
         try:
-            df_all = yf.download(" ".join(tickers), period="5d", interval="1d",
-                                  progress=False, auto_adjust=True, group_by="ticker")
-            if len(tickers) == 1:
-                t = tickers[0]
-                closes = df_all["Close"].dropna()
+            df_all = yf.download(tickers, period="5d", interval="1d",
+                                  progress=False, auto_adjust=True)
+            # yfinance 1.2.0: kolumner är alltid MultiIndex (metric, ticker)
+            # df_all["Close"] ger DataFrame med tickers som kolumner
+            if isinstance(df_all.columns, pd.MultiIndex):
+                close_df = df_all["Close"]
+                if isinstance(close_df, pd.Series):
+                    close_df = close_df.to_frame(name=tickers[0])
+            else:
+                # Flat kolumner (single ticker, äldre yfinance)
+                close_df = df_all[["Close"]].rename(columns={"Close": tickers[0]})
+
+            for t in tickers:
+                col = t if t in close_df.columns else (close_df.columns[0] if len(close_df.columns) == 1 else None)
+                if col is None:
+                    continue
+                closes = close_df[col].dropna()
                 if len(closes) >= 2:
-                    kurs_map[t] = (float(closes.iloc[-1]), (float(closes.iloc[-1]) - float(closes.iloc[-2])) / float(closes.iloc[-2]) * 100)
+                    k, p = float(closes.iloc[-1]), float(closes.iloc[-2])
+                    kurs_map[t] = (k, (k - p) / p * 100)
                 elif len(closes) == 1:
                     kurs_map[t] = (float(closes.iloc[-1]), 0.0)
-            else:
-                for t in tickers:
-                    try:
-                        closes = df_all[t]["Close"].dropna()
-                        if len(closes) >= 2:
-                            kurs_map[t] = (float(closes.iloc[-1]), (float(closes.iloc[-1]) - float(closes.iloc[-2])) / float(closes.iloc[-2]) * 100)
-                        elif len(closes) == 1:
-                            kurs_map[t] = (float(closes.iloc[-1]), 0.0)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Batch kurs-fel: {e}")
 
     innehav = []
     total_mv = 0
