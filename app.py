@@ -2155,9 +2155,13 @@ def portfolio_vy(portfolio_id):
         .modal.visa { display:flex; }
         .modal-box { background:#fff; border-radius:10px; padding:28px; width:420px; max-width:95vw; }
         .modal-box h3 { font-size:1.1em; margin-bottom:16px; color:#1F3864; }
-        .chart-container { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:24px; }
-        .chart-box { background:#fff; border-radius:8px; padding:16px; border:1px solid #ddd; }
-        .chart-box h3 { font-size:0.88em; color:#1F3864; font-weight:bold; margin-bottom:12px; text-transform:uppercase; letter-spacing:0.05em; }
+        .chart-container { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:20px; }
+        .chart-box { background:#fff; border-radius:8px; padding:14px; border:1px solid #ddd; }
+        .chart-box h3 { font-size:0.82em; color:#1F3864; font-weight:bold; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.05em; }
+        .period-btn { padding:3px 9px; background:#f0f0f0; border:1px solid #ccc; border-radius:4px; cursor:pointer; font-size:0.76em; font-weight:bold; color:#555; }
+        .period-btn.aktiv { background:#1F3864; color:#fff; border-color:#1F3864; }
+        .period-btn:hover:not(.aktiv) { background:#d8e2f0; }
+        .index-sel { padding:3px 8px; border:1px solid #ccc; border-radius:4px; font-size:0.78em; color:#333; }
     </style>
     </head><body>""" + NAV_HTML + """
 
@@ -2185,14 +2189,41 @@ def portfolio_vy(portfolio_id):
             </div>
         </div>
 
+        <!-- Portföljutveckling -->
+        <div class="chart-box" style="margin-bottom:16px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                <h3 style="margin:0;">Portföljutveckling</h3>
+                <select id="index-sel" class="index-sel" onchange="laddaHistorik()">
+                    <option value="">Ingen jämförelse</option>
+                    <option value="^OMX">OMX30</option>
+                    <option value="^OMXSPI">OMXPI</option>
+                    <option value="^DJI">Dow Jones</option>
+                    <option value="URTH">MSCI World</option>
+                </select>
+            </div>
+            <div style="display:flex; gap:5px; margin-bottom:12px; flex-wrap:wrap;">
+                <button class="period-btn" onclick="setPeriod('start',this)">Från start</button>
+                <button class="period-btn" onclick="setPeriod('1d',this)">1D</button>
+                <button class="period-btn" onclick="setPeriod('1v',this)">1V</button>
+                <button class="period-btn" onclick="setPeriod('1m',this)">1M</button>
+                <button class="period-btn aktiv" onclick="setPeriod('1y',this)">1Å</button>
+                <button class="period-btn" onclick="setPeriod('3y',this)">3Å</button>
+                <button class="period-btn" onclick="setPeriod('5y',this)">5Å</button>
+                <button class="period-btn" onclick="setPeriod('7y',this)">7Å</button>
+                <button class="period-btn" onclick="setPeriod('10y',this)">10Å</button>
+            </div>
+            <div id="port-laddning" style="text-align:center; color:#888; font-size:0.85em; padding:20px 0; display:none;">Hämtar data...</div>
+            <canvas id="portgraf" height="90"></canvas>
+        </div>
+
         <div class="chart-container">
             <div class="chart-box">
                 <h3>Tillgångsslag</h3>
-                <canvas id="donut1" height="200"></canvas>
+                <canvas id="donut1" height="140"></canvas>
             </div>
             <div class="chart-box">
                 <h3>Valutaexponering</h3>
-                <canvas id="donut2" height="200"></canvas>
+                <canvas id="donut2" height="140"></canvas>
             </div>
         </div>
 
@@ -2314,6 +2345,64 @@ def portfolio_vy(portfolio_id):
         </div>
 
         <script>
+        // ── Portföljutveckling ──────────────────────────────
+        let portChart = null;
+        let aktivPeriod = '1y';
+
+        function setPeriod(p, btn) {
+            aktivPeriod = p;
+            document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('aktiv'));
+            btn.classList.add('aktiv');
+            laddaHistorik();
+        }
+
+        function laddaHistorik() {
+            const index = document.getElementById('index-sel').value;
+            const laddEl = document.getElementById('port-laddning');
+            const canvasEl = document.getElementById('portgraf');
+            laddEl.style.display = 'block';
+            canvasEl.style.display = 'none';
+            fetch('/portfolio/{{ portfolj.id }}/historik?period=' + aktivPeriod + '&index=' + encodeURIComponent(index))
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    laddEl.style.display = 'none';
+                    canvasEl.style.display = 'block';
+                    if (portChart) portChart.destroy();
+                    const datasets = [{
+                        label: '{{ portfolj.namn }}',
+                        data: data.values,
+                        borderColor: '#1F3864',
+                        backgroundColor: 'rgba(31,56,100,0.07)',
+                        borderWidth: 2, pointRadius: 0, fill: true, tension: 0.3
+                    }];
+                    if (data.index_values && data.index_values.length) {
+                        const indexNamn = document.getElementById('index-sel');
+                        datasets.push({
+                            label: indexNamn.options[indexNamn.selectedIndex].text,
+                            data: data.index_values,
+                            borderColor: '#cc6600', borderWidth: 1.5,
+                            borderDash: [5,5], pointRadius: 0, fill: false
+                        });
+                    }
+                    portChart = new Chart(document.getElementById('portgraf').getContext('2d'), {
+                        type: 'line',
+                        data: { labels: data.dates, datasets: datasets },
+                        options: {
+                            plugins: { legend: { position: 'top', labels: { font: { size: 10 } } },
+                                tooltip: { callbacks: { label: ctx => ctx.dataset.label + ': ' + Math.round(ctx.parsed.y).toLocaleString('sv-SE') + ' SEK' } }
+                            },
+                            scales: {
+                                x: { ticks: { maxTicksLimit: 8, font: { size: 10 } } },
+                                y: { position: 'right', ticks: { font: { size: 10 }, callback: v => Math.round(v).toLocaleString('sv-SE') } }
+                            },
+                            interaction: { intersect: false, mode: 'index' }
+                        }
+                    });
+                })
+                .catch(function(e) { laddEl.style.display = 'none'; canvasEl.style.display = 'block'; console.error('Historik-fel:', e); });
+        }
+        laddaHistorik();
+
         // Donut 1 - Tillgångsslag
         new Chart(document.getElementById('donut1').getContext('2d'), {
             type: 'doughnut',
@@ -2390,6 +2479,95 @@ def portfolio_vy(portfolio_id):
                                   asset_type_json=asset_type_json, asset_type_values=asset_type_values,
                                   currency_json=currency_json, currency_values=currency_values,
                                   is_merged=is_merged, today=today)
+
+
+@app.route("/portfolio/<int:portfolio_id>/historik")
+@inloggning_kravs
+def portfolio_historik(portfolio_id):
+    period  = request.args.get("period", "1y")
+    index_t = request.args.get("index", "").strip()
+
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute(q("SELECT del_portfolj_id FROM portfolj_sammanslagning WHERE total_portfolj_id=?", db_type), (portfolio_id,))
+    sub_ids = [r[0] for r in c.fetchall()]
+    portfolio_ids = sub_ids if sub_ids else [portfolio_id]
+    pl = ",".join(["%s" if db_type == "postgres" else "?" for _ in portfolio_ids])
+    c.execute(f"""SELECT i.ticker,
+               SUM(CASE WHEN t.typ='KOP' THEN t.antal WHEN t.typ='SALJ' THEN -t.antal ELSE 0 END) as antal
+               FROM innehav i LEFT JOIN transaktioner t ON t.innehav_id=i.id
+               WHERE i.portfolj_id IN ({pl}) GROUP BY i.ticker""", portfolio_ids)
+    holdings = {r[0]: float(r[1] or 0) for r in c.fetchall() if r[1] and float(r[1]) > 0}
+    c.execute(f"SELECT MIN(t.datum) FROM transaktioner t JOIN innehav i ON t.innehav_id=i.id WHERE i.portfolj_id IN ({pl})", portfolio_ids)
+    earliest = c.fetchone()[0]
+    conn.close()
+
+    if not holdings:
+        return jsonify({"dates": [], "values": [], "index_values": []})
+
+    period_cfg = {
+        "1d":    ("5d",  "1h"),
+        "1v":    ("1mo", "1d"),
+        "1m":    ("3mo", "1d"),
+        "1y":    ("1y",  "1d"),
+        "3y":    ("3y",  "1wk"),
+        "5y":    ("5y",  "1wk"),
+        "7y":    ("10y", "1wk"),
+        "10y":   ("10y", "1mo"),
+        "start": ("max", "1wk"),
+    }
+    yf_period, interval = period_cfg.get(period, ("1y", "1d"))
+
+    try:
+        tickers = list(holdings.keys())
+        df = yf.download(tickers, period=yf_period, interval=interval,
+                         progress=False, auto_adjust=True)
+        if isinstance(df.columns, pd.MultiIndex):
+            close_df = df["Close"]
+            if isinstance(close_df, pd.Series):
+                close_df = close_df.to_frame(name=tickers[0])
+        else:
+            close_df = df[["Close"]].rename(columns={"Close": tickers[0]})
+
+        close_df = close_df.ffill().dropna(how="all")
+
+        # Filtrera 7y och start
+        if period == "7y":
+            cutoff = pd.Timestamp.now(tz=close_df.index.tz) - pd.DateOffset(years=7)
+            close_df = close_df[close_df.index >= cutoff]
+        elif period == "start" and earliest:
+            cutoff = pd.Timestamp(earliest)
+            if close_df.index.tz:
+                cutoff = cutoff.tz_localize(close_df.index.tz)
+            close_df = close_df[close_df.index >= cutoff]
+
+        port_values = pd.Series(0.0, index=close_df.index)
+        for t, antal in holdings.items():
+            if t in close_df.columns:
+                port_values += close_df[t].fillna(0) * antal
+
+        fmt = "%Y-%m-%d %H:%M" if interval == "1h" else "%Y-%m-%d"
+        dates  = [d.strftime(fmt) for d in close_df.index]
+        values = [round(v) for v in port_values.tolist()]
+
+        index_values = []
+        if index_t:
+            idx = yf.download(index_t, period=yf_period, interval=interval,
+                               progress=False, auto_adjust=True)
+            if isinstance(idx.columns, pd.MultiIndex):
+                idx_s = idx["Close"].iloc[:, 0]
+            else:
+                idx_s = idx["Close"]
+            idx_s = idx_s.reindex(close_df.index, method="ffill")
+            first_port = port_values.iloc[0] if len(port_values) and port_values.iloc[0] else 1
+            first_idx  = idx_s.iloc[0] if len(idx_s) and idx_s.iloc[0] else 1
+            norm = first_port / first_idx
+            index_values = [round(v * norm) if pd.notna(v) else None for v in idx_s.tolist()]
+
+        return jsonify({"dates": dates, "values": values, "index_values": index_values})
+    except Exception as e:
+        print(f"Historik-fel: {e}")
+        return jsonify({"dates": [], "values": [], "index_values": [], "error": str(e)})
 
 
 @app.route("/portfolio/ny", methods=["POST"])
@@ -2541,24 +2719,15 @@ def portfolio_innehav_detalj(holding_id):
     transaktioner = [{"typ": r[0], "antal": r[1], "kurs": r[2], "datum": r[3], "notering": r[4]} for r in c.fetchall()]
     conn.close()
 
-    # Hämta historisk data
-    try:
-        df = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
-        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-        kurs_nu = float(df["Close"].iloc[-1])
-        x_labels = [d.strftime("%d %b") for d in df.index]
-        kurs_data = [round(float(v), 2) for v in df["Close"].squeeze()]
-
-        # Beräkna snittköpkurs
-        tot_antal = sum(t["antal"] if t["typ"]=="KOP" else -t["antal"] for t in transaktioner)
-        tot_kost = sum(t["antal"]*t["kurs"] if t["typ"]=="KOP" else -t["antal"]*t["kurs"] for t in transaktioner)
-        avg_price = tot_kost / tot_antal if tot_antal else 0
-        mv = round(tot_antal * kurs_nu, 0)
-        unrealized = round(mv - tot_kost, 0)
-        unrealized_pct = round(unrealized / tot_kost * 100, 1) if tot_kost else 0
-    except Exception as e:
-        kurs_nu = 0; x_labels = []; kurs_data = []; avg_price = 0
-        mv = 0; unrealized = 0; unrealized_pct = 0; tot_antal = 0; tot_kost = 0
+    # Beräkna snittkurs och nuläge
+    tot_antal = sum(t["antal"] if t["typ"]=="KOP" else -t["antal"] for t in transaktioner)
+    tot_kost  = sum(t["antal"]*t["kurs"] if t["typ"]=="KOP" else -t["antal"]*t["kurs"] for t in transaktioner)
+    avg_price = tot_kost / tot_antal if tot_antal else 0
+    kurs_nu, _ = hamta_portfolj_kurs(ticker)
+    kurs_nu = kurs_nu or 0
+    mv = round(tot_antal * kurs_nu, 0)
+    unrealized = round(mv - tot_kost, 0)
+    unrealized_pct = round(unrealized / tot_kost * 100, 1) if tot_kost else 0
 
     import json as _json
     html = """<!DOCTYPE html><html>
@@ -2584,8 +2753,19 @@ def portfolio_innehav_detalj(holding_id):
             </div>
         </div>
 
-        <div style="background:#fff; border-radius:8px; padding:20px; border:1px solid #ddd; margin-bottom:24px;">
-            <canvas id="kursgraf" height="120"></canvas>
+        <div style="background:#fff; border-radius:8px; padding:16px; border:1px solid #ddd; margin-bottom:24px;">
+            <div style="display:flex; gap:5px; margin-bottom:12px; flex-wrap:wrap;">
+                <button class="period-btn" onclick="setPeriodAktie('1d',this)">1D</button>
+                <button class="period-btn" onclick="setPeriodAktie('1v',this)">1V</button>
+                <button class="period-btn" onclick="setPeriodAktie('1m',this)">1M</button>
+                <button class="period-btn aktiv" onclick="setPeriodAktie('1y',this)">1Å</button>
+                <button class="period-btn" onclick="setPeriodAktie('3y',this)">3Å</button>
+                <button class="period-btn" onclick="setPeriodAktie('5y',this)">5Å</button>
+                <button class="period-btn" onclick="setPeriodAktie('7y',this)">7Å</button>
+                <button class="period-btn" onclick="setPeriodAktie('10y',this)">10Å</button>
+            </div>
+            <div id="aktie-laddning" style="text-align:center; color:#888; font-size:0.85em; padding:20px 0;">Hämtar data...</div>
+            <canvas id="kursgraf" height="120" style="display:none;"></canvas>
         </div>
 
         <div class="tb-section">
@@ -2626,28 +2806,60 @@ def portfolio_innehav_detalj(holding_id):
             </div>
         </div>
 
+        <style>
+        .period-btn { padding:3px 9px; background:#f0f0f0; border:1px solid #ccc; border-radius:4px; cursor:pointer; font-size:0.76em; font-weight:bold; color:#555; }
+        .period-btn.aktiv { background:#1F3864; color:#fff; border-color:#1F3864; }
+        .period-btn:hover:not(.aktiv) { background:#d8e2f0; }
+        </style>
         <script>
-        new Chart(document.getElementById('kursgraf').getContext('2d'), {
-            type: 'line',
-            data: {
-                labels: {{ x_labels_json|safe }},
-                datasets: [{
-                    label: '{{ namn }}',
-                    data: {{ kurs_data_json|safe }},
-                    borderColor: '#1F3864', backgroundColor: 'rgba(31,56,100,0.07)',
-                    borderWidth: 2, pointRadius: 0, fill: true, tension: 0.3
-                }, {
-                    label: 'Snittköpkurs {{ "%.2f"|format(avg_price) }}',
-                    data: Array({{ x_labels_json|safe }}.length).fill({{ avg_price }}),
-                    borderColor: '#cc6600', borderWidth: 1.5, borderDash: [5,5],
-                    pointRadius: 0, fill: false
-                }]
-            },
-            options: {
-                plugins: { legend: { position: 'top' } },
-                scales: { x: { ticks: { maxTicksLimit: 10 } }, y: { position: 'right' } }
-            }
-        });
+        let aktieChart = null;
+        let aktivAktiePeriod = '1y';
+        const avgPrice = {{ avg_price }};
+
+        function setPeriodAktie(p, btn) {
+            aktivAktiePeriod = p;
+            document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('aktiv'));
+            btn.classList.add('aktiv');
+            laddaAktieHistorik();
+        }
+
+        function laddaAktieHistorik() {
+            const laddEl = document.getElementById('aktie-laddning');
+            const canvasEl = document.getElementById('kursgraf');
+            laddEl.style.display = 'block';
+            canvasEl.style.display = 'none';
+            fetch('/portfolio/innehav/{{ holding_id }}/historik?period=' + aktivAktiePeriod)
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    laddEl.style.display = 'none';
+                    canvasEl.style.display = 'block';
+                    if (aktieChart) aktieChart.destroy();
+                    aktieChart = new Chart(canvasEl.getContext('2d'), {
+                        type: 'line',
+                        data: {
+                            labels: data.dates,
+                            datasets: [{
+                                label: '{{ namn }}',
+                                data: data.prices,
+                                borderColor: '#1F3864', backgroundColor: 'rgba(31,56,100,0.07)',
+                                borderWidth: 2, pointRadius: 0, fill: true, tension: 0.3
+                            }, {
+                                label: 'Snittköpkurs ' + avgPrice.toFixed(2),
+                                data: Array(data.dates.length).fill(avgPrice),
+                                borderColor: '#cc6600', borderWidth: 1.5,
+                                borderDash: [5,5], pointRadius: 0, fill: false
+                            }]
+                        },
+                        options: {
+                            plugins: { legend: { position: 'top' } },
+                            scales: { x: { ticks: { maxTicksLimit: 10 } }, y: { position: 'right' } },
+                            interaction: { intersect: false, mode: 'index' }
+                        }
+                    });
+                })
+                .catch(function(e) { laddEl.textContent = 'Kunde inte ladda data.'; console.error(e); });
+        }
+        laddaAktieHistorik();
         </script>
     </body></html>"""
 
@@ -2656,10 +2868,52 @@ def portfolio_innehav_detalj(holding_id):
         holding_id=holding_id,
         kurs_nu=kurs_nu, tot_antal=tot_antal, avg_price=avg_price,
         mv=mv, unrealized=unrealized, unrealized_pct=unrealized_pct,
-        transaktioner=transaktioner,
-        x_labels_json=_json.dumps(x_labels),
-        kurs_data_json=_json.dumps(kurs_data))
+        transaktioner=transaktioner)
 
+
+
+@app.route("/portfolio/innehav/<int:holding_id>/historik")
+@inloggning_kravs
+def innehav_historik(holding_id):
+    period = request.args.get("period", "1y")
+    period_cfg = {
+        "1d":  ("5d",  "1h"),
+        "1v":  ("1mo", "1d"),
+        "1m":  ("3mo", "1d"),
+        "1y":  ("1y",  "1d"),
+        "3y":  ("3y",  "1wk"),
+        "5y":  ("5y",  "1wk"),
+        "7y":  ("10y", "1wk"),
+        "10y": ("10y", "1mo"),
+    }
+    yf_period, interval = period_cfg.get(period, ("1y", "1d"))
+    conn, db_type = get_conn()
+    c = conn.cursor()
+    c.execute(q("SELECT ticker FROM innehav WHERE id=?", db_type), (holding_id,))
+    rad = c.fetchone()
+    conn.close()
+    if not rad:
+        return jsonify({"dates": [], "prices": []})
+    ticker = rad[0]
+    try:
+        df = yf.download(ticker, period=yf_period, interval=interval,
+                          progress=False, auto_adjust=True)
+        if isinstance(df.columns, pd.MultiIndex):
+            closes = df["Close"].iloc[:, 0]
+        else:
+            closes = df["Close"]
+        if period == "7y":
+            cutoff = pd.Timestamp.now(tz=closes.index.tz) - pd.DateOffset(years=7)
+            closes = closes[closes.index >= cutoff]
+        closes = closes.dropna()
+        fmt = "%Y-%m-%d %H:%M" if interval == "1h" else "%Y-%m-%d"
+        return jsonify({
+            "dates":  [d.strftime(fmt) for d in closes.index],
+            "prices": [round(float(v), 2) for v in closes.tolist()]
+        })
+    except Exception as e:
+        print(f"Aktie historik-fel: {e}")
+        return jsonify({"dates": [], "prices": []})
 
 
 @app.route("/portfolio/innehav/<int:holding_id>/ta-bort", methods=["POST"])
