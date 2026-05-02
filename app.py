@@ -463,6 +463,7 @@ NAV_HTML = """
     <a href="/tracker" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Tracker</a>
     <a href="/prisalarm" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Prisalarm</a>
     <a href="/portfolio" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Portfölj</a>
+    <a href="/historik" style="color:#0044cc; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em;">Historik</a>
     <a href="/logout" style="color:#999; text-decoration:none; padding:7px 16px; background:#f0f0f0; border-radius:6px; border:1px solid #ccc; font-size:0.9em; margin-left:auto;">Logga ut</a>
 </nav>
 """
@@ -3184,6 +3185,277 @@ def portfolio_importera_excel(portfolio_id):
         return redirect(url_for("portfolio_vy", portfolio_id=portfolio_id))
     except Exception as e:
         return f"Import-fel: {str(e)}", 500
+
+@app.route("/historik")
+@inloggning_kravs
+def historik_sida():
+    conn, db_type = get_conn()
+    if db_type != "postgres":
+        conn.close()
+        return "<p>Historikdata kräver PostgreSQL-anslutning.</p>", 503
+
+    cur = conn.cursor()
+
+    # KPI: snapshot-totaler 2026-04-28
+    cur.execute("""
+        SELECT SUM(marknadsvarde_sek), SUM(gav_sek), SUM(orealiserat_sek)
+        FROM historik_holdings_snapshot
+        WHERE datum = '2026-04-28'
+    """)
+    mv_total, gav_total, orealj_total = cur.fetchone()
+    mv_total     = float(mv_total     or 0)
+    gav_total    = float(gav_total    or 0)
+    orealj_total = float(orealj_total or 0)
+
+    # KPI: totalt realiserat
+    cur.execute("SELECT SUM(realiserad_vinst_sek) FROM historik_realized_pnl")
+    pnl_total = float((cur.fetchone()[0]) or 0)
+
+    # Portföljutveckling: kumulativt investerat per månad
+    cur.execute("""
+        SELECT DATE_TRUNC('month', affarsdatum)::date AS manad,
+               SUM(-likvidbelopp_sek) AS netto
+        FROM historik_transactions
+        WHERE ordertyp IN ('kop', 'salj')
+          AND likvidbelopp_sek IS NOT NULL
+          AND kalla IN ('historik_danske', 'historik_carnegie', 'oppningsbalans')
+        GROUP BY DATE_TRUNC('month', affarsdatum)
+        ORDER BY manad
+    """)
+    kumulativt   = 0
+    portf_labels = []
+    portf_invest = []
+    for manad, netto in cur.fetchall():
+        kumulativt += float(netto or 0)
+        portf_labels.append(manad.strftime("%Y-%m"))
+        portf_invest.append(round(kumulativt))
+
+    # Realiserat PnL per värdepapper
+    cur.execute("""
+        SELECT s.namn, p.kalla, SUM(p.realiserad_vinst_sek) AS vinst
+        FROM historik_realized_pnl p
+        JOIN historik_securities s ON s.id = p.security_id
+        GROUP BY s.namn, p.kalla
+        ORDER BY vinst DESC
+    """)
+    pnl_rows = cur.fetchall()
+
+    # Utdelningar och räntor
+    cur.execute("""
+        SELECT t.ordertyp, t.depa, SUM(t.likvidbelopp_sek) AS total
+        FROM historik_transactions t
+        WHERE t.ordertyp IN ('utdelning', 'ranta')
+        GROUP BY t.ordertyp, t.depa
+    """)
+    income_map = {}
+    for ordertyp, depa, total in cur.fetchall():
+        income_map[(ordertyp, depa)] = float(total or 0)
+
+    conn.close()
+
+    utd_carnegie = income_map.get(("utdelning", "1687755"),   0)
+    utd_danske   = income_map.get(("utdelning", "3023140659"), 0)
+    ranta_total  = income_map.get(("ranta",     "1687755"),   0)
+    income_total = utd_carnegie + utd_danske + ranta_total
+
+    def fmt(v):
+        if v is None:
+            return "-"
+        return f"{round(float(v)):,}".replace(",", " ")
+
+    pnl_labels = [r[0][:32] for r in pnl_rows]
+    pnl_values = [round(float(r[2] or 0)) for r in pnl_rows]
+    pnl_colors = ["rgba(0,119,0,0.75)" if v >= 0 else "rgba(204,0,0,0.75)" for v in pnl_values]
+    mv_point   = [None] * (len(portf_labels) - 1) + [round(mv_total)]
+
+    orealj_color = "#007700" if orealj_total >= 0 else "#cc0000"
+    orealj_css   = "pos"    if orealj_total >= 0 else "neg"
+    pnl_color    = "#007700" if pnl_total    >= 0 else "#cc0000"
+    pnl_css      = "pos"    if pnl_total    >= 0 else "neg"
+
+    html = ("""<!DOCTYPE html><html>
+<head>
+    <title>Historisk Portföljanalys</title>
+    <meta charset="utf-8">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+"""
+    + BASE_STYLE + PORTFOLIO_STYLE +
+    f"""
+</head>
+<body>""" + NAV_HTML + f"""
+<h1>Historisk Portföljanalys</h1>
+<p class="uppdaterad">Snapshot: 2026-04-28 &nbsp;&middot;&nbsp; Transaktionshistorik fr.o.m. 2021-05-03 &nbsp;&middot;&nbsp; Danske Bank + Carnegie ISK</p>
+
+<div class="kpi-rad" style="margin-bottom:28px;">
+    <div class="kpi-box">
+        <div class="etikett">Marknadsvärde</div>
+        <div class="varde">{fmt(mv_total)} SEK</div>
+    </div>
+    <div class="kpi-box">
+        <div class="etikett">Anskaffningsvärde</div>
+        <div class="varde">{fmt(gav_total)} SEK</div>
+    </div>
+    <div class="kpi-box" style="border-left-color:{orealj_color};">
+        <div class="etikett">Orealiserat</div>
+        <div class="varde {orealj_css}">{fmt(orealj_total)} SEK</div>
+    </div>
+    <div class="kpi-box" style="border-left-color:{pnl_color};">
+        <div class="etikett">Realiserat PnL</div>
+        <div class="varde {pnl_css}">{fmt(pnl_total)} SEK</div>
+    </div>
+    <div class="kpi-box">
+        <div class="etikett">Utdelningar</div>
+        <div class="varde pos">{fmt(utd_carnegie + utd_danske)} SEK</div>
+    </div>
+    <div class="kpi-box">
+        <div class="etikett">Ränteintäkter</div>
+        <div class="varde pos">{fmt(ranta_total)} SEK</div>
+    </div>
+</div>
+
+<div class="tb-section">
+    <div class="tb-header">Portföljutveckling &ndash; Kumulativt investerat kapital</div>
+    <div style="background:#fff; padding:24px; border-radius:0 0 8px 8px; box-shadow:0 1px 4px rgba(0,0,0,0.08);">
+        <canvas id="portfChart" height="80"></canvas>
+    </div>
+</div>
+
+<div class="tb-section">
+    <div class="tb-header">Realiserat PnL per Värdepapper</div>
+    <div style="background:#fff; padding:24px; border-radius:0 0 8px 8px; box-shadow:0 1px 4px rgba(0,0,0,0.08);">
+        <canvas id="pnlChart" height="140"></canvas>
+    </div>
+</div>
+
+<div class="tb-section">
+    <div class="tb-header">Realiserat PnL &ndash; Detalj</div>
+    <table class="tb-table">
+        <thead><tr>
+            <th>Värdepapper</th>
+            <th>Källa</th>
+            <th style="text-align:right;">Realiserat (SEK)</th>
+        </tr></thead>
+        <tbody>
+""")
+
+    for namn, kalla, vinst in pnl_rows:
+        v   = float(vinst or 0)
+        css = "pos" if v >= 0 else "neg"
+        lbl = "Carnegie" if kalla == "carnegie_rapport" else "Danske"
+        html += (f'        <tr><td>{namn}</td>'
+                 f'<td><span class="badge-typ">{lbl}</span></td>'
+                 f'<td style="text-align:right;" class="{css}">{fmt(v)}</td></tr>\n')
+
+    html += f"""        </tbody>
+    </table>
+</div>
+
+<div class="tb-section">
+    <div class="tb-header">Utdelningar &amp; Ränteintäkter</div>
+    <table class="tb-table">
+        <thead><tr>
+            <th>Typ</th><th>Depå</th><th style="text-align:right;">Totalt (SEK)</th>
+        </tr></thead>
+        <tbody>
+            <tr><td>Utdelning</td><td>Carnegie ISK</td><td class="pos" style="text-align:right;">{fmt(utd_carnegie)}</td></tr>
+            <tr><td>Utdelning</td><td>Danske Bank</td><td class="pos" style="text-align:right;">{fmt(utd_danske)}</td></tr>
+            <tr><td>Ränta</td><td>Carnegie ISK</td><td class="pos" style="text-align:right;">{fmt(ranta_total)}</td></tr>
+            <tr style="font-weight:bold; background:#f0f4ff;">
+                <td colspan="2">Totalt</td>
+                <td class="pos" style="text-align:right;">{fmt(income_total)}</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<script>
+const portfLabels = {json.dumps(portf_labels)};
+const portfInvest = {json.dumps(portf_invest)};
+const portfMV     = {json.dumps(mv_point)};
+
+new Chart(document.getElementById('portfChart'), {{
+    type: 'line',
+    data: {{
+        labels: portfLabels,
+        datasets: [
+            {{
+                label: 'Investerat kapital (SEK)',
+                data: portfInvest,
+                borderColor: '#1F3864',
+                backgroundColor: 'rgba(31,56,100,0.1)',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 3,
+                order: 1
+            }},
+            {{
+                label: 'Marknadsvärde 2026-04-28',
+                data: portfMV,
+                borderColor: '#007700',
+                backgroundColor: '#007700',
+                pointRadius: 10,
+                pointStyle: 'star',
+                showLine: false,
+                order: 0
+            }}
+        ]
+    }},
+    options: {{
+        responsive: true,
+        plugins: {{
+            legend: {{ position: 'top' }},
+            tooltip: {{
+                callbacks: {{
+                    label: ctx => ctx.dataset.label + ': ' + (ctx.raw != null ? Math.round(ctx.raw).toLocaleString('sv-SE') + ' SEK' : '')
+                }}
+            }}
+        }},
+        scales: {{
+            y: {{
+                ticks: {{
+                    callback: v => (v / 1000000).toFixed(1) + ' Mkr'
+                }}
+            }}
+        }}
+    }}
+}});
+
+new Chart(document.getElementById('pnlChart'), {{
+    type: 'bar',
+    data: {{
+        labels: {json.dumps(pnl_labels)},
+        datasets: [{{
+            label: 'Realiserat PnL (SEK)',
+            data: {json.dumps(pnl_values)},
+            backgroundColor: {json.dumps(pnl_colors)},
+            borderRadius: 4
+        }}]
+    }},
+    options: {{
+        indexAxis: 'y',
+        responsive: true,
+        plugins: {{
+            legend: {{ display: false }},
+            tooltip: {{
+                callbacks: {{
+                    label: ctx => ctx.raw != null ? Math.round(ctx.raw).toLocaleString('sv-SE') + ' SEK' : ''
+                }}
+            }}
+        }},
+        scales: {{
+            x: {{
+                ticks: {{
+                    callback: v => v.toLocaleString('sv-SE')
+                }}
+            }}
+        }}
+    }}
+}});
+</script>
+</body></html>"""
+
+    return render_template_string(html)
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
